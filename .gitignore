@@ -1,0 +1,4 @@
+data/
+wandb/
+best_model.pth
+ff.*
