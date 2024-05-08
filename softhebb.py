@@ -23,17 +23,9 @@ import wandb
 torch.manual_seed(42)
 torch.mps.manual_seed(42)
 
-transform_train = transforms.Compose([
-    transforms.ToTensor(),
-    # transforms.Normalize((0.1307,), (0.3081,)) # MNIST
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) # CIFAR10
-])
-
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    # transforms.Normalize((0.1307,), (0.3081,)) # MNIST
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) # CIFAR10
-])
+CIFAR10 = 'cifar10'
+MNIST = 'mnist'
+available_datasets = [CIFAR10, MNIST]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
@@ -44,7 +36,27 @@ parser.add_argument('--epochs', type=int, default=15, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
 parser.add_argument('--save_model', action='store_true', help='save model')
+parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
+parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10 or mnist)')
 args = parser.parse_args()
+
+if args.dataset.lower() not in available_datasets:
+    raise ValueError(f"Dataset {args.dataset} not available. Choose one of {available_datasets}")
+dataset = args.dataset.lower()
+
+norm_transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if dataset == CIFAR10 else transforms.Normalize((0.1307,), (0.3081,))
+transform_train = transforms.Compose([
+    transforms.ToTensor(),
+    norm_transform
+])
+
+if args.augment_data and dataset == CIFAR10:
+    transform_train.transforms.insert(0, AutoAugment(AutoAugmentPolicy.CIFAR10))
+
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    norm_transform
+])
 
 # Main training loop CIFAR10
 if __name__ == "__main__":
@@ -54,17 +66,25 @@ if __name__ == "__main__":
     )
         
     device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
-    model = DeepSoftHebb(device=device, in_channels=3, dropout=args.dropout)
+    in_channels = 3 if dataset == CIFAR10 else 1
+    input_size = 32 if dataset == CIFAR10 else 28
+    model = DeepSoftHebb(device=device, in_channels=in_channels, dropout=args.dropout, input_size=input_size)
     model.to(device)
 
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     print([name for name, param in model.named_parameters() if param.requires_grad])
     criterion = nn.CrossEntropyLoss()
 
-    dataset = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
-    split = [ math.floor(0.9 * len(dataset)), math.ceil(0.1 * len(dataset)) ]
-    tain_dataset, val_dataset = torch.utils.data.random_split(dataset, split)
-    test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
+    if dataset == CIFAR10:
+        dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
+        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
+        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
+    elif dataset == MNIST:
+        dataset_base = datasets.MNIST(root='./data', train=True, transform=transform_train, download=True)
+        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
+        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
 
     train_dataloader = DataLoader(tain_dataset, batch_size=args.batch_size, shuffle=True) 
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
