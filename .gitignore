@@ -2,3 +2,5 @@ data/
 wandb/
 best_model.pth
 ff.*
+.venv/
+__pycache__/

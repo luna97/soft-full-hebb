@@ -43,10 +43,10 @@ class SoftHebbConv2d(nn.Module):
         self.register_buffer('weight', weight)
         
 
-        self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.1, requires_grad=True)
-        self.Cj = nn.Parameter(torch.ones(out_channels) * 0.1, requires_grad=True)
-        self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.1, requires_grad=True)
-        self.Ck2 = nn.Parameter(torch.ones(kernel_size) * 0.1, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.01, requires_grad=True)
+        self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
+        self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
+        self.Ck2 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
 
     def forward(self, x):
         x = F.pad(x, self.F_padding, self.padding_mode)  # pad input
@@ -87,7 +87,6 @@ class SoftHebbConv2d(nn.Module):
             yu = torch.sum(torch.mul(softwta_activs, weighted_input), dim=(0, 2, 3))
             delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight
             delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
-            # delta_weight = delta_weight / delta_weight.norm()
 
             # norm_diff = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) ** 0.5
             # norm_diff = norm_diff * 0.01
@@ -139,11 +138,11 @@ class SoftHebbLinear(nn.Module):
 
             delta_weight = (xt - xy)
             
-            self.weight = self.weight + delta_weight * CiCj # * norm_diff[:, None] ** 0.5  # store in grad to be used with common optimizers
+            self.weight = self.weight + delta_weight * CiCj 
             #self.weight = self.wanda_prune(self.weight, x, 0.7)
             self.weight = self.weight.clip(-10, 10)
 
-        return F.linear(x, self.weight)# .log_softmax(dim=1)
+        return F.linear(x, self.weight)
     
     def wanda_prune(self, weight, input, ratio):
         """
