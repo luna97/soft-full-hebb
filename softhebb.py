@@ -21,8 +21,8 @@ from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
 
 torch.manual_seed(42)
-torch.mps.manual_seed(42)
 torch.cuda.manual_seed(42)
+
 
 CIFAR10 = 'cifar10'
 MNIST = 'mnist'
@@ -31,9 +31,9 @@ available_datasets = [CIFAR10, MNIST, IMAGENET]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
-parser.add_argument('--lr', type=float, default=0.00001, help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=0.001, help='weight decay')
-parser.add_argument('--batch_size', type=int, default=32, help='batch size')
+parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
+parser.add_argument('--weight_decay', type=float, default=0., help='weight decay')
+parser.add_argument('--batch_size', type=int, default=64, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
@@ -42,6 +42,8 @@ parser.add_argument('--augment_data', action='store_true', help='use data augmen
 parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
 parser.add_argument('--use_neuron_centric', action='store_true', help='use neuron-centric learning')
 args = parser.parse_args()
+
+print("Using neuron-centric learning" if args.use_neuron_centric else "Using softhebb original learning")
 
 if args.dataset.lower() not in available_datasets:
     raise ValueError(f"Dataset {args.dataset} not available. Choose one of {available_datasets}")
@@ -67,6 +69,37 @@ transform = transforms.Compose([
     norm_transform
 ])
 
+class FastCIFAR10(torchvision.datasets.CIFAR10):
+    """
+    Improves performance of training on CIFAR10 by removing the PIL interface and pre-loading on the GPU (2-3x speedup).
+
+    Taken from https://github.com/y0ast/pytorch-snippets/tree/main/fast_mnist
+    """
+
+    def __init__(self, *args, **kwargs):
+        device = kwargs.pop('device', "cpu")
+        super().__init__(*args, **kwargs)
+
+        self.data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
+        self.data = torch.movedim(self.data, -1, 1)  # -> set dim to: (batch, channels, height, width)
+        self.targets = torch.tensor(self.targets, device=device)
+
+    def __getitem__(self, index: int):
+        """
+        Parameters
+        ----------
+        index : int
+            Index of the element to be returned
+
+        Returns
+        -------
+            tuple: (image, target) where target is the index of the target class
+        """
+        img = self.data[index]
+        target = self.targets[index]
+
+        return img, target
+
 # Main training loop CIFAR10
 if __name__ == "__main__":
     if args.log: wandb.init(
@@ -80,29 +113,33 @@ if __name__ == "__main__":
     model = DeepSoftHebb(device=device, in_channels=in_channels, dropout=args.dropout, input_size=input_size, use_neuron_centric=args.use_neuron_centric)
     model.to(device)
 
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = Adam(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # add lr scheduler
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
 
     print([name for name, param in model.named_parameters() if param.requires_grad])
     criterion = nn.CrossEntropyLoss()
 
     if dataset == CIFAR10:
-        dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
+        dataset_base = FastCIFAR10(root='./data', train=True, download=True)
+        # dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
-        test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        test_dataset = FastCIFAR10(root='./data', train=False, download=True)
+        # test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
     elif dataset == MNIST:
         dataset_base = datasets.MNIST(root='./data', train=True, transform=transform_train, download=True)
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
         test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
     elif dataset == IMAGENET:
         dataset_base = datasets.ImageNet(root='./data', train=True, transform=transform_train, download=True)
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
         test_dataset = datasets.ImageNet(root='./data', train=False, transform=transform, download=True)
 
-    train_dataloader = DataLoader(tain_dataset, batch_size=args.batch_size, shuffle=True) 
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    train_dataloader = DataLoader(dataset_base, batch_size=args.batch_size, shuffle=True) 
+    val_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False) 
 
     # Unsupervised training with SoftHebb
@@ -114,18 +151,24 @@ if __name__ == "__main__":
     # show the full dataset to the model before training
     if not args.use_neuron_centric:
         print("Unsupervised hebbian learning.. ")
-        full_dataloader = DataLoader(dataset_base, batch_size=args.batch_size, shuffle=True)
-        model.unsupervised_train()
-        for data in tqdm(full_dataloader):
-            inputs, _ = data
-            inputs = inputs.to(device)
-            _ = model(inputs)
-        model.unsupervised_eval()
+        # full_dataloader = DataLoader(dataset_base, batch_size=10, shuffle=True)
+        # model.unsupervised_train()
+        # with torch.no_grad():
+        #   for data in tqdm(full_dataloader):
+        #        inputs, _ = data
+        #        inputs = inputs.to(device)
+        #        _ = model(inputs)
+        # model.unsupervised_eval()
+        # load weights
+        model.conv1.weight.data = torch.load("conv1_weight.pth")
+        model.conv2.weight.data = torch.load("conv2_weight.pth")
+        model.conv3.weight.data = torch.load("conv3_weight.pth")
+
 
     epoch_pbar = tqdm(range(args.epochs))
     for e in epoch_pbar:
         model.train()
-        train_loss = 0.
+        running_loss = 0.
         train_correct = []
         train_targets = []
         pbar = tqdm(enumerate(train_dataloader, 0), total=total)
@@ -133,23 +176,24 @@ if __name__ == "__main__":
             inputs, targets = data
             inputs = inputs.to(device)
             targets = targets.to(device)
+            optimizer.zero_grad()
 
-            outputs = model(inputs, targets)
+            outputs = model(inputs)
 
             loss = criterion(outputs, targets)
 
-            if loss.grad_fn is not None:
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
+            #if loss.grad_fn is not None:
+            loss.backward()
+            optimizer.step()
 
-            train_loss += loss.item()
+            running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             train_targets.append(targets.detach().cpu())
             train_correct.append(predicted.detach().cpu())
-            pbar.set_description(f"Train Loss: {train_loss / (i + 1):.4f}")
+            pbar.set_description(f"Train Loss: {running_loss / (i + 1):.4f}")
 
-        acc_train = accuracy_score(torch.cat(train_targets), torch.cat(train_correct))
+        scheduler.step()
+        acc_train = (torch.cat(train_correct) == torch.cat(train_targets)).sum().item() / len(train_dataset)
         f1_train = f1_score(torch.cat(train_targets), torch.cat(train_correct), average='macro')
 
         # Validation loop
@@ -177,7 +221,7 @@ if __name__ == "__main__":
                 
         acc = accuracy_score(torch.cat(val_targets), torch.cat(val_correct))
         f1 = f1_score(torch.cat(val_targets), torch.cat(val_correct), average='macro')
-
+        print(f"Train Loss: {running_loss / total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
         print(f"Val Loss: {val_loss / total_val:.4f}, Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
 
         if best_val_acc < acc:
@@ -191,7 +235,7 @@ if __name__ == "__main__":
                 "Validation Loss": val_loss / total_val,
                 "Validation Accuracy": acc, 
                 "Validation F1 score": f1,
-                "Training Loss": train_loss / total,
+                "Training Loss": running_loss / total,
                 "Training Accuracy": acc_train,
                 "Training F1 score": f1_train
             })
