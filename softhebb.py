@@ -160,9 +160,9 @@ if __name__ == "__main__":
         #        _ = model(inputs)
         # model.unsupervised_eval()
         # load weights
-        model.conv1.weight.data = torch.load("conv1_weight.pth")
-        model.conv2.weight.data = torch.load("conv2_weight.pth")
-        model.conv3.weight.data = torch.load("conv3_weight.pth")
+        model.conv1.weight.data = torch.load("conv1_weight.pth", map_location=device)
+        model.conv2.weight.data = torch.load("conv2_weight.pth", map_location=device)
+        model.conv3.weight.data = torch.load("conv3_weight.pth", map_location=device)
 
 
     epoch_pbar = tqdm(range(args.epochs))
@@ -171,6 +171,7 @@ if __name__ == "__main__":
         running_loss = 0.
         train_correct = []
         train_targets = []
+        train_total = 0
         pbar = tqdm(enumerate(train_dataloader, 0), total=total)
         for i, data in pbar:
             inputs, targets = data
@@ -186,11 +187,13 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
+
             running_loss += loss.item()
+            train_total += targets.size(0)
             _, predicted = torch.max(outputs.data, 1)
             train_targets.append(targets.detach().cpu())
             train_correct.append(predicted.detach().cpu())
-            pbar.set_description(f"Train Loss: {running_loss / (i + 1):.4f}")
+            pbar.set_description(f"Train Loss: {running_loss / train_total:.4f}")
 
         scheduler.step()
         acc_train = (torch.cat(train_correct) == torch.cat(train_targets)).sum().item() / len(train_dataset)
@@ -201,8 +204,8 @@ if __name__ == "__main__":
         val_loss = 0.0
         val_correct = []
         val_targets = []
-        total_val = len(val_dataloader)
-        pbar_val = tqdm(enumerate(val_dataloader, 0), total=total_val, leave=False)
+        pbar_val = tqdm(enumerate(val_dataloader, 0), total=len(val_dataloader), leave=False)
+        total_val = 0
 
         with torch.no_grad():
             for i, data in pbar_val:
@@ -214,6 +217,7 @@ if __name__ == "__main__":
 
                 loss = criterion(outputs, targets)
                 val_loss += loss.item()
+                total_val += targets.size(0)
 
                 _, predicted = torch.max(outputs.data, 1)
                 val_targets.append(targets.detach().cpu())
@@ -221,7 +225,7 @@ if __name__ == "__main__":
                 
         acc = accuracy_score(torch.cat(val_targets), torch.cat(val_correct))
         f1 = f1_score(torch.cat(val_targets), torch.cat(val_correct), average='macro')
-        print(f"Train Loss: {running_loss / total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
+        print(f"Train Loss: {running_loss / train_total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
         print(f"Val Loss: {val_loss / total_val:.4f}, Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
 
         if best_val_acc < acc:
@@ -235,7 +239,7 @@ if __name__ == "__main__":
                 "Validation Loss": val_loss / total_val,
                 "Validation Accuracy": acc, 
                 "Validation F1 score": f1,
-                "Training Loss": running_loss / total,
+                "Training Loss": running_loss / train_total,
                 "Training Accuracy": acc_train,
                 "Training F1 score": f1_train
             })

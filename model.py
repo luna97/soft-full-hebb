@@ -231,7 +231,7 @@ class DeepSoftHebb(nn.Module):
             self.classifier = SoftHebbLinear((input_size // 2) * 1536, 10, device=device, t_invert=1)
         else:
             self.classifier = nn.Linear((input_size // 2) * 1536, 10)
-            self.classifier.weight.data = 0.11048543456039805 * torch.randn(10, (input_size // 2) * 1536)
+            self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, (input_size // 2) * 1536)
 
         self.use_neuron_centric = use_neuron_centric
         self.dropout = nn.Dropout(dropout)
