@@ -22,22 +22,25 @@ import wandb
 
 torch.manual_seed(42)
 torch.mps.manual_seed(42)
+torch.cuda.manual_seed(42)
 
 CIFAR10 = 'cifar10'
 MNIST = 'mnist'
-available_datasets = [CIFAR10, MNIST]
+IMAGENET = 'imagenet'
+available_datasets = [CIFAR10, MNIST, IMAGENET]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
 parser.add_argument('--lr', type=float, default=0.00001, help='learning rate')
 parser.add_argument('--weight_decay', type=float, default=0.001, help='weight decay')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
-parser.add_argument('--epochs', type=int, default=15, help='number of epochs')
+parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
 parser.add_argument('--save_model', action='store_true', help='save model')
 parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
-parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10 or mnist)')
+parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
+parser.add_argument('--use_neuron_centric', action='store_true', help='use neuron-centric learning')
 args = parser.parse_args()
 
 if args.dataset.lower() not in available_datasets:
@@ -51,7 +54,13 @@ transform_train = transforms.Compose([
 ])
 
 if args.augment_data and dataset == CIFAR10:
-    transform_train.transforms.insert(0, AutoAugment(AutoAugmentPolicy.CIFAR10))
+    augmentation = transforms.Compose([ 
+        transforms.RandomPosterize(bits=5, p=0.2),
+        transforms.RandomAdjustSharpness(2, p=0.2),
+        # transforms.RandomEqualize(0.2),
+        transforms.RandomHorizontalFlip(0.2)
+    ])
+    transform_train.transforms.insert(0, augmentation)
 
 transform = transforms.Compose([
     transforms.ToTensor(),
@@ -66,12 +75,13 @@ if __name__ == "__main__":
     )
         
     device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
-    in_channels = 3 if dataset == CIFAR10 else 1
-    input_size = 32 if dataset == CIFAR10 else 28
-    model = DeepSoftHebb(device=device, in_channels=in_channels, dropout=args.dropout, input_size=input_size)
+    in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
+    input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
+    model = DeepSoftHebb(device=device, in_channels=in_channels, dropout=args.dropout, input_size=input_size, use_neuron_centric=args.use_neuron_centric)
     model.to(device)
 
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
     print([name for name, param in model.named_parameters() if param.requires_grad])
     criterion = nn.CrossEntropyLoss()
 
@@ -85,6 +95,11 @@ if __name__ == "__main__":
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
         tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
         test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+    elif dataset == IMAGENET:
+        dataset_base = datasets.ImageNet(root='./data', train=True, transform=transform_train, download=True)
+        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
+        tain_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
+        test_dataset = datasets.ImageNet(root='./data', train=False, transform=transform, download=True)
 
     train_dataloader = DataLoader(tain_dataset, batch_size=args.batch_size, shuffle=True) 
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
@@ -95,6 +110,17 @@ if __name__ == "__main__":
 
     best_model = None
     best_val_acc = 0.0
+
+    # show the full dataset to the model before training
+    if not args.use_neuron_centric:
+        print("Unsupervised hebbian learning.. ")
+        full_dataloader = DataLoader(dataset_base, batch_size=args.batch_size, shuffle=True)
+        model.unsupervised_train()
+        for data in tqdm(full_dataloader):
+            inputs, _ = data
+            inputs = inputs.to(device)
+            _ = model(inputs)
+        model.unsupervised_eval()
 
     epoch_pbar = tqdm(range(args.epochs))
     for e in epoch_pbar:
