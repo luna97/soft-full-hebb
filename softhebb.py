@@ -14,19 +14,18 @@ from torch.optim import SGD, Adam, AdamW
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
-from sklearn.metrics import f1_score, accuracy_score
-from model import DeepSoftHebb, CustomStepLR, FastCIFAR10
+from sklearn.metrics import f1_score
+from model import DeepSoftHebb, CustomStepLR
 import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
+import os
+from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
-CIFAR10 = 'cifar10'
-MNIST = 'mnist'
-IMAGENET = 'imagenet'
 available_datasets = [CIFAR10, MNIST, IMAGENET]
 
 # Parse command line arguments
@@ -41,6 +40,7 @@ parser.add_argument('--save_model', action='store_true', help='save model')
 parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
 parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
 parser.add_argument('--neuron_centric', action='store_true', help='use neuron-centric learning')
+parser.add_argument('--unsupervised_first', action='store_true', help='unsupervised training first')
 args = parser.parse_args()
 
 print("Using neuron-centric learning" if args.neuron_centric else "Using softhebb original learning")
@@ -49,25 +49,6 @@ if args.dataset.lower() not in available_datasets:
     raise ValueError(f"Dataset {args.dataset} not available. Choose one of {available_datasets}")
 dataset = args.dataset.lower()
 
-norm_transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if dataset == CIFAR10 else transforms.Normalize((0.1307,), (0.3081,))
-transform_train = transforms.Compose([
-    transforms.ToTensor(),
-    norm_transform
-])
-
-if args.augment_data and dataset == CIFAR10:
-    augmentation = transforms.Compose([ 
-        transforms.RandomPosterize(bits=5, p=0.2),
-        transforms.RandomAdjustSharpness(2, p=0.2),
-        # transforms.RandomEqualize(0.2),
-        transforms.RandomHorizontalFlip(0.2)
-    ])
-    transform_train.transforms.insert(0, augmentation)
-
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    norm_transform
-])
 
 
 # Main training loop CIFAR10
@@ -80,37 +61,28 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
     in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
     input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
-    model = DeepSoftHebb(device=device, in_channels=in_channels, dropout=args.dropout, input_size=input_size, neuron_centric=args.neuron_centric)
-    model.to(device)
+    model = DeepSoftHebb(
+        device=device,
+        in_channels=in_channels, 
+        dropout=args.dropout, 
+        input_size=input_size, 
+        neuron_centric=args.neuron_centric,
+        unsupervised_first=args.unsupervised_first
+    ).to(device)
+    model.train()
 
-    if args.neuron_centric:
-        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.neuron_centric and not args.unsupervised_first:
+        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     else:
-        optimizer = Adam(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # add lr scheduler
     if not args.neuron_centric:
         scheduler = CustomStepLR(optimizer, nb_epochs=50)
 
-    print([name for name, param in model.named_parameters() if param.requires_grad])
+    print("Parameters that requires grad: ", [name for name, param in model.named_parameters() if param.requires_grad])
     criterion = nn.CrossEntropyLoss()
 
-    if dataset == CIFAR10:
-        dataset_base = FastCIFAR10(root='./data', train=True, download=True)
-        # dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
-        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
-        test_dataset = FastCIFAR10(root='./data', train=False, download=True)
-        # test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
-    elif dataset == MNIST:
-        dataset_base = datasets.MNIST(root='./data', train=True, transform=transform_train, download=True)
-        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
-        test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
-    elif dataset == IMAGENET:
-        dataset_base = datasets.ImageNet(root='./data', train=True, transform=transform_train, download=True)
-        split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
-        test_dataset = datasets.ImageNet(root='./data', train=False, transform=transform, download=True)
+    dataset_base, train_dataset, val_dataset, test_dataset = get_datasets(dataset)
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True) 
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
@@ -123,27 +95,34 @@ if __name__ == "__main__":
     best_val_acc = 0.0
 
     # show the full dataset to the model before training
-    if not args.neuron_centric:
-        print("Unsupervised hebbian learning.. ")
-        full_dataloader = DataLoader(dataset_base, batch_size=10, shuffle=True)
-        model.unsupervised_train()
-        with torch.no_grad():
-            for data in tqdm(full_dataloader):
-                inputs, _ = data
-                inputs = inputs.to(device)
-                _ = model(inputs)
-        # load weights
-        # model.conv1.weight.data = torch.load("conv1_weight.pth", map_location=device)
-        # model.conv2.weight.data = torch.load("conv2_weight.pth", map_location=device)
-        #model.conv3.weight.data = torch.load("conv3_weight.pth", map_location=device)
+    if args.unsupervised_first:
+        if os.path.exists("conv_model.pth"):
+            print("Loading weights from pre-trained model..")
+            state_dict = torch.load("conv_model.pth", map_location=device)
+            print("Found state dict with keys: ", state_dict.keys())
+            # model.load_state_dict(state_dict, strict=False)
+            model.conv1.weight = state_dict['conv1.weight']
+            model.conv2.weight = state_dict['conv2.weight']
+            model.conv3.weight = state_dict['conv3.weight']
+        else:
+            print("Unsupervised hebbian learning.. ")
+            full_dataloader = DataLoader(dataset_base, batch_size=10, shuffle=True)
+            with torch.no_grad():
+                for data in tqdm(full_dataloader):
+                    inputs, _ = data
+                    inputs = inputs.to(device)
+                    _ = model(inputs)
+            # save the model
+            print("Saving model with keys: ", model.state_dict().keys())
+            torch.save(model.state_dict(), "conv_model.pth")
         model.unsupervised_eval()
-
-
 
 
     epoch_pbar = tqdm(range(args.epochs))
     for e in epoch_pbar:
         model.train()
+        if args.unsupervised_first:
+            model.unsupervised_eval()
         running_loss = 0.
         train_correct = []
         train_targets = []
@@ -154,6 +133,7 @@ if __name__ == "__main__":
             inputs, targets = data
             inputs = inputs.to(device)
             targets = targets.to(device)
+
 
             if args.neuron_centric:
                 outputs = model(inputs, targets)

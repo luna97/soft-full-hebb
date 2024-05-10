@@ -28,7 +28,6 @@ class SoftHebbConv2d(nn.Module):
         This simplified implementation omits certain configurable aspects, like using a bias, groups>1, etc. which can
         be found in the full implementation in hebbconv.py
         """
-        nn.Conv2d
         super(SoftHebbConv2d, self).__init__()
         assert groups == 1, "Simple implementation does not support groups > 1."
         self.in_channels = in_channels
@@ -47,11 +46,11 @@ class SoftHebbConv2d(nn.Module):
 
         weight_range = 25 / math.sqrt((in_channels / groups) * kernel_size * kernel_size)
         weight = weight_range * torch.randn((out_channels, in_channels // groups, *self.kernel_size)).requires_grad_(False).to(device)
-        nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
 
         self.register_buffer('weight', weight)
 
         if self.neuron_centric:
+            nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
             self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.01, requires_grad=True)
             self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
             self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
@@ -142,29 +141,31 @@ class SoftHebbLinear(nn.Module):
         self.register_buffer('weight', weight)
 
         self.t_invert = torch.tensor(t_invert)
-        self.Ci = nn.Parameter(torch.ones(in_channels) * 0.01, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(in_channels) * 0.0001, requires_grad=True)
         self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
+        # self.CiCj = nn.Parameter(torch.ones(out_channels, in_channels) * 0.1, requires_grad=True)
+
 
     def forward(self, x, target = None):
         # x = x / x.norm(dim=1, keepdim=True)
+        out = F.linear(x, self.weight)
         if self.training and target is not None: 
+            # clean gradients
             self.weight = self.weight.detach()
             self.t_invert = self.t_invert.detach()
-
-            out = F.linear(x, self.weight)
-            CiCj = self.Cj[:, None] * self.Ci[None, :]
+            
+            # CiCj = 
             
             xt = target.T @ x
             out = (out * self.t_invert).softmax(dim=1)
             xy = out.T @ x
 
-            delta_weight = (xt - xy)
+            delta_weight = (xt - xy).detach()
             
-            self.weight = self.weight + delta_weight * CiCj 
-            #self.weight = self.wanda_prune(self.weight, x, 0.7)
+            self.weight = self.weight + delta_weight * self.Ci
+            self.weight = self.wanda_prune(self.weight, x, 0.3)
             self.weight = self.weight.clip(-10, 10)
-
-        return F.linear(x, self.weight)
+        return out
     
     def wanda_prune(self, weight, input, ratio):
         """
@@ -181,65 +182,67 @@ class SoftHebbLinear(nn.Module):
         weight.scatter_(dim=1, index=pruned_idx, src=torch.zeros_like(weight))
         return weight
 
+
 class DeepSoftHebb(nn.Module):
-    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False):
+    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False, unsupervised_first=False):
         super(DeepSoftHebb, self).__init__()
         # block 1
-        self.bn1 = nn.BatchNorm2d(in_channels, affine=False, track_running_stats=False).requires_grad_(False)
+        self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
         self.conv1 = SoftHebbConv2d(
             in_channels=in_channels, 
-            out_channels=32, 
+            out_channels=96, 
             kernel_size=5, 
             padding=2, 
             t_invert=1, 
             device=device, 
             initial_lr=0.08, 
             first_layer=True,
-            neuron_centric=neuron_centric
+            neuron_centric=neuron_centric and not unsupervised_first
         )
-        self.activ1 = Triangle(power=0.7) 
+        self.activ1 = Triangle(power=0.7) #nn.ReLU() #
         self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
 
         # block 2
-        self.bn2 = nn.BatchNorm2d(32, affine=False, track_running_stats=False).requires_grad_(False)
+        self.bn2 = nn.BatchNorm2d(96, affine=False).requires_grad_(False)
         self.conv2 = SoftHebbConv2d(
-            in_channels=32, 
-            out_channels=96,
+            in_channels=96, 
+            out_channels=384,
             kernel_size=3, 
             padding=1, 
             t_invert=0.65, 
             device=device, 
             initial_lr=0.005,
-            neuron_centric=neuron_centric
+            neuron_centric=neuron_centric and not unsupervised_first
         )
-        self.activ2 = Triangle(power=1.4) #
+        self.activ2 = Triangle(power=1.4) #nn.ReLU() # 
         self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
         # block 3
 
-        self.bn3 = nn.BatchNorm2d(96, affine=False, track_running_stats=False).requires_grad_(False)
+        self.bn3 = nn.BatchNorm2d(384, affine=False).requires_grad_(False)
         self.conv3 = SoftHebbConv2d(
-            in_channels=96, 
-            out_channels=128,
+            in_channels=384, 
+            out_channels=1536,
             kernel_size=3, 
             padding=1, 
             t_invert=0.25, 
             device=device,
             initial_lr=0.01,
-            neuron_centric=neuron_centric
+            neuron_centric=neuron_centric and not unsupervised_first
         )
 
-        self.activ3 = Triangle(power=1.) #
+        self.activ3 = Triangle(power=1.) #nn.ReLU() #
         self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         # block 4
         self.flatten = nn.Flatten()
 
         if neuron_centric:
-            self.classifier = SoftHebbLinear((input_size // 2) * 128, 10, device=device, t_invert=1)
+            self.classifier = SoftHebbLinear((input_size // 2) * 1536, 10, device=device, t_invert=1)
         else:
             self.classifier = nn.Linear((input_size // 2) * 1536, 10)
             self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, (input_size // 2) * 1536)
 
         self.neuron_centric = neuron_centric
+        self.unsupervised_first = unsupervised_first
         self.dropout = nn.Dropout(dropout)
         
 
@@ -258,27 +261,6 @@ class DeepSoftHebb(nn.Module):
         else:
             return self.classifier(self.dropout(self.flatten(out)))
         
-    def bn_eval(self):
-        self.bn1.eval()
-        self.bn2.eval()
-        self.bn3.eval()
-        
-    def train(self, mode=True):
-        if self.neuron_centric:
-            self.dropout.train(mode)
-            self.classifier.train(mode)
-            self.conv1.train(mode)
-            self.conv2.train(mode)
-            self.conv3.train(mode)
-        else:
-            self.dropout.train(mode)
-            self.classifier.train(mode)
-
-    def unsupervised_train(self):
-        self.conv1.train()
-        self.conv2.train()
-        self.conv3.train()
-
     def unsupervised_eval(self):
         self.conv1.eval()
         self.conv2.eval()
@@ -286,8 +268,7 @@ class DeepSoftHebb(nn.Module):
         self.bn1.eval()
         self.bn2.eval()
         self.bn3.eval()
-
-
+    
 class Triangle(nn.Module):
     def __init__(self, power: float = 1, inplace: bool = True):
         super(Triangle, self).__init__()
@@ -299,37 +280,6 @@ class Triangle(nn.Module):
         return F.relu(input, inplace=self.inplace) ** self.power
     
 
-
-class FastCIFAR10(torchvision.datasets.CIFAR10):
-    """
-    Improves performance of training on CIFAR10 by removing the PIL interface and pre-loading on the GPU (2-3x speedup).
-
-    Taken from https://github.com/y0ast/pytorch-snippets/tree/main/fast_mnist
-    """
-
-    def __init__(self, *args, **kwargs):
-        device = kwargs.pop('device', "cpu")
-        super().__init__(*args, **kwargs)
-
-        self.data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
-        self.data = torch.movedim(self.data, -1, 1)  # -> set dim to: (batch, channels, height, width)
-        self.targets = torch.tensor(self.targets, device=device)
-
-    def __getitem__(self, index: int):
-        """
-        Parameters
-        ----------
-        index : int
-            Index of the element to be returned
-
-        Returns
-        -------
-            tuple: (image, target) where target is the index of the target class
-        """
-        img = self.data[index]
-        target = self.targets[index]
-
-        return img, target
     
 class CustomStepLR(StepLR):
     """

@@ -11,10 +11,7 @@ import torch.nn.functional as F
 from torch.nn.modules.utils import _pair
 from torch.optim.lr_scheduler import StepLR
 import torchvision
-from tqdm import tqdm
 
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
 
 class SoftHebbConv2d(nn.Module):
     def __init__(
@@ -255,7 +252,7 @@ class FastCIFAR10(torchvision.datasets.CIFAR10):
 
 # Main training loop CIFAR10
 if __name__ == "__main__":
-    device = torch.device('cuda')
+    device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
     model = DeepSoftHebb()
     model.to(device)
 
@@ -280,39 +277,22 @@ if __name__ == "__main__":
     # Unsupervised training with SoftHebb
     running_loss = 0.0
     print("Running unsupervised training...")
-    model.conv1.weight.data = torch.load("conv1_weight.pth")
-    model.conv2.weight.data = torch.load("conv2_weight.pth")
-    model.conv3.weight.data = torch.load("conv3_weight.pth")
-    if False:
-        for i, data in tqdm(enumerate(unsup_trainloader, 0)):
-            inputs, _ = data
-            inputs = inputs.to(device)
 
-            # zero the parameter gradients
-            unsup_optimizer.zero_grad()
+    from tqdm import tqdm
+    for i, data in tqdm(enumerate(unsup_trainloader, 0)):
+        inputs, _ = data
+        inputs = inputs.to(device)
 
-            # forward + update computation
-            with torch.no_grad():
-                outputs = model(inputs)
+        # zero the parameter gradients
+        unsup_optimizer.zero_grad()
 
-            # optimize
-            unsup_optimizer.step()
-            unsup_lr_scheduler.step()
+        # forward + update computation
+        with torch.no_grad():
+            outputs = model(inputs)
 
-    # save weights conv
-    # conv1_weight = model.conv1.weight.clone().detach()
-    # conv2_weight = model.conv2.weight.clone().detach()
-    # conv3_weight = model.conv3.weight.clone().detach()
-
-    # save to file
-    # torch.save(conv1_weight, 'conv1_weight.pth')
-    # torch.save(conv2_weight, 'conv2_weight.pth')
-    # torch.save(conv3_weight, 'conv3_weight.pth')
-
-    # print(model.bn1)
-    # print(model.bn2)
-    # print(model.bn3)
-
+        # optimize
+        unsup_optimizer.step()
+        unsup_lr_scheduler.step()
 
     # Supervised training of classifier
     # set requires grad false and eval mode for all modules but classifier
