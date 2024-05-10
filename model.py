@@ -51,7 +51,7 @@ class SoftHebbConv2d(nn.Module):
 
         if self.neuron_centric:
             nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
-            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.01, requires_grad=True)
+            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.1, requires_grad=True)
             self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
             self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
             self.Ck2 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
@@ -107,9 +107,8 @@ class SoftHebbConv2d(nn.Module):
                 eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr   
 
-            self.weight = self.weight + delta_weight * eta 
+            self.weight = self.weight + delta_weight.detach() * eta 
             self.weight = self.weight.clip(-10, 10)
-                
 
         return F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
         
@@ -141,9 +140,8 @@ class SoftHebbLinear(nn.Module):
         self.register_buffer('weight', weight)
 
         self.t_invert = torch.tensor(t_invert)
-        self.Ci = nn.Parameter(torch.ones(in_channels) * 0.0001, requires_grad=True)
-        self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
-        # self.CiCj = nn.Parameter(torch.ones(out_channels, in_channels) * 0.1, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.01, requires_grad=True)
+        self.Cj = nn.Parameter(torch.ones(out_channels, 1) * 0.01, requires_grad=True)
 
 
     def forward(self, x, target = None):
@@ -153,18 +151,18 @@ class SoftHebbLinear(nn.Module):
             # clean gradients
             self.weight = self.weight.detach()
             self.t_invert = self.t_invert.detach()
-            
-            # CiCj = 
-            
+                        
             xt = target.T @ x
             out = (out * self.t_invert).softmax(dim=1)
             xy = out.T @ x
 
             delta_weight = (xt - xy).detach()
             
-            self.weight = self.weight + delta_weight * self.Ci
-            self.weight = self.wanda_prune(self.weight, x, 0.3)
+            self.weight = self.weight + delta_weight.detach() * self.Ci * self.Cj
+            # self.weight = self.wanda_prune(self.weight, x, 0.3)
             self.weight = self.weight.clip(-10, 10)
+            return F.linear(x, self.weight)
+
         return out
     
     def wanda_prune(self, weight, input, ratio):
