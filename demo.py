@@ -333,7 +333,8 @@ if __name__ == "__main__":
         train_loss = 0.0
         correct_train = 0
         total_train = 0
-        for i, data in tqdm(enumerate(sup_trainloader, 0), leave=False):
+        train_tqdm = tqdm(enumerate(sup_trainloader, 0), leave=False)
+        for i, data in train_tqdm:
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
@@ -354,6 +355,11 @@ if __name__ == "__main__":
             _, predicted = torch.max(outputs.data, 1)
             correct_train += (predicted == labels).sum().item()
 
+            train_tqdm.set_postfix({
+                'loss': train_loss / total_train,
+                'accuracy': correct_train / total_train
+            })
+
         sup_lr_scheduler.step()
         # Evaluation on test set
         
@@ -362,9 +368,10 @@ if __name__ == "__main__":
         running_loss = 0.
         correct = 0
         total = 0
+        test_tqdm = tqdm(testloader)
         # since we're not training, we don't need to calculate the gradients for our outputs
         with torch.no_grad():
-            for data in testloader:
+            for data in test_tqdm:
                 images, labels = data
                 images = images.to(device)
                 labels = labels.to(device)
@@ -377,8 +384,14 @@ if __name__ == "__main__":
                 loss = criterion(outputs, labels)
                 running_loss += loss.item()
 
-        print(f'Accuracy of the network on the 10000 test images: {100 * correct / total} %')
-        print(f'test loss: {running_loss / total:.3f}')
+                test_tqdm.set_postfix({
+                    'test_loss': running_loss / total,
+                    'test_accuracy': correct / total
+                })
+        print(f'Train acc { correct_train / total_train} %')
+        print(f'Train loss: {train_loss / total_train:.3f}')
+        print(f'Test acc { correct / total} %')
+        print(f'Test loss: {running_loss / total:.3f}')
 
         epoch_tqdm.set_postfix({
             'loss': train_loss / total_train,

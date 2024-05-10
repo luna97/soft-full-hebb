@@ -3,7 +3,8 @@ from torch.nn.modules.utils import _pair
 import math
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch.optim.lr_scheduler import StepLR
+import torchvision
 
 class SoftHebbConv2d(nn.Module):
     def __init__(
@@ -19,7 +20,7 @@ class SoftHebbConv2d(nn.Module):
             initial_lr: float = 0.01,
             device = 'cpu',
             first_layer=False,
-            use_neuron_centric=False
+            neuron_centric=False
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -42,27 +43,29 @@ class SoftHebbConv2d(nn.Module):
         self.initial_lr = initial_lr
         self.weight_norm_dep = 1
         self.first_layer = first_layer
-        self.use_neuron_centric = use_neuron_centric
+        self.neuron_centric = neuron_centric
 
         weight_range = 25 / math.sqrt((in_channels / groups) * kernel_size * kernel_size)
         weight = weight_range * torch.randn((out_channels, in_channels // groups, *self.kernel_size)).requires_grad_(False).to(device)
-        weight = weight
-        # nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
 
         self.register_buffer('weight', weight)
 
-        if self.use_neuron_centric:
-            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.1, requires_grad=True)
-            self.Cj = nn.Parameter(torch.ones(out_channels) * 0.1, requires_grad=True)
+        if self.neuron_centric:
+            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.01, requires_grad=True)
+            self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
             self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
             self.Ck2 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
 
     def forward(self, x):
         x = F.pad(x, self.F_padding, self.padding_mode)  # pad input
-        weighted_input = F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
         
         if self.training:
-            # self.weight = self.weight.detach()
+            self.weight = self.weight.detach()
+            self.t_invert = self.t_invert.detach()
+
+            weighted_input = F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
+
             # perform conv, obtain weighted input u \in [B, OC, OH, OW]
             
             # ===== find post-synaptic activations y = sign(u)*softmax(u, dim=C), s(u)=1 - 2*I[u==max(u,dim=C)] =====
@@ -80,7 +83,6 @@ class SoftHebbConv2d(nn.Module):
             # Turn winner neurons' activations back to hebbian
             flat_softwta_activs[win_neurons, competing_idx] = - flat_softwta_activs[win_neurons, competing_idx]
 
-
             softwta_activs = flat_softwta_activs.view(out_channels, batch_size, height_out, width_out).transpose(0, 1)
             # ===== compute plastic update Δw = y*(x - u*w) = y*x - (y*u)*w =======================================
             # Use Convolutions to apply the plastic update. Sweep over inputs with postynaptic activations.
@@ -97,19 +99,21 @@ class SoftHebbConv2d(nn.Module):
 
             # sum over batch, output pixels: each kernel element will influence all batches and output pixels.
             yu = torch.sum(torch.mul(softwta_activs, weighted_input), dim=(0, 2, 3))
-            delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight
+            delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight.clone().detach()
             delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
 
-            if self.use_neuron_centric:
+            if self.neuron_centric:
                 eta = self.Cj[:, None, None, None] * self.Ci[None, :, None, None] * self.Ck1[None, None, :, None] * self.Ck2[None, None, None, :]
             else:
                 eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr   
 
-            self.weight = self.weight + delta_weight * eta # store in grad to be used with common optimizers
-            # self.weight = self.weight.clip(-10, 10)
+            self.weight = self.weight + delta_weight * eta 
+            self.weight = self.weight.clip(-10, 10)
+                
 
-        return weighted_input # F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
+        return F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
+        
     
 class SoftHebbLinear(nn.Module):
     def __init__(
@@ -145,6 +149,8 @@ class SoftHebbLinear(nn.Module):
         # x = x / x.norm(dim=1, keepdim=True)
         if self.training and target is not None: 
             self.weight = self.weight.detach()
+            self.t_invert = self.t_invert.detach()
+
             out = F.linear(x, self.weight)
             CiCj = self.Cj[:, None] * self.Ci[None, :]
             
@@ -152,7 +158,7 @@ class SoftHebbLinear(nn.Module):
             out = (out * self.t_invert).softmax(dim=1)
             xy = out.T @ x
 
-            delta_weight = (xt - xy - self.weight ** 2)
+            delta_weight = (xt - xy)
             
             self.weight = self.weight + delta_weight * CiCj 
             #self.weight = self.wanda_prune(self.weight, x, 0.7)
@@ -176,65 +182,66 @@ class SoftHebbLinear(nn.Module):
         return weight
 
 class DeepSoftHebb(nn.Module):
-    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, use_neuron_centric=False):
+    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False):
         super(DeepSoftHebb, self).__init__()
         # block 1
-        self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
+        self.bn1 = nn.BatchNorm2d(in_channels, affine=False, track_running_stats=False).requires_grad_(False)
         self.conv1 = SoftHebbConv2d(
             in_channels=in_channels, 
-            out_channels=96, 
+            out_channels=32, 
             kernel_size=5, 
             padding=2, 
             t_invert=1, 
             device=device, 
             initial_lr=0.08, 
             first_layer=True,
-            use_neuron_centric=use_neuron_centric
+            neuron_centric=neuron_centric
         )
-        self.activ1 = Triangle(0.7) #nn.ReLU()
+        self.activ1 = Triangle(power=0.7) 
         self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
 
         # block 2
-        self.bn2 = nn.BatchNorm2d(96, affine=False).requires_grad_(False)
+        self.bn2 = nn.BatchNorm2d(32, affine=False, track_running_stats=False).requires_grad_(False)
         self.conv2 = SoftHebbConv2d(
-            in_channels=96, 
-            out_channels=384,
+            in_channels=32, 
+            out_channels=96,
             kernel_size=3, 
             padding=1, 
             t_invert=0.65, 
             device=device, 
             initial_lr=0.005,
-            use_neuron_centric=use_neuron_centric
+            neuron_centric=neuron_centric
         )
-        self.activ2 = Triangle(1.4) #nn.ReLU()
+        self.activ2 = Triangle(power=1.4) #
         self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
         # block 3
 
-        self.bn3 = nn.BatchNorm2d(384, affine=False).requires_grad_(False)
+        self.bn3 = nn.BatchNorm2d(96, affine=False, track_running_stats=False).requires_grad_(False)
         self.conv3 = SoftHebbConv2d(
-            in_channels=384, 
-            out_channels=1536,
+            in_channels=96, 
+            out_channels=128,
             kernel_size=3, 
             padding=1, 
             t_invert=0.25, 
             device=device,
             initial_lr=0.01,
-            use_neuron_centric=use_neuron_centric
+            neuron_centric=neuron_centric
         )
 
-        self.activ3 = Triangle(1.) #nn.ReLU()
+        self.activ3 = Triangle(power=1.) #
         self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         # block 4
         self.flatten = nn.Flatten()
 
-        if use_neuron_centric:
-            self.classifier = SoftHebbLinear((input_size // 2) * 1536, 10, device=device, t_invert=1)
+        if neuron_centric:
+            self.classifier = SoftHebbLinear((input_size // 2) * 128, 10, device=device, t_invert=1)
         else:
             self.classifier = nn.Linear((input_size // 2) * 1536, 10)
             self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, (input_size // 2) * 1536)
 
-        self.use_neuron_centric = use_neuron_centric
+        self.neuron_centric = neuron_centric
         self.dropout = nn.Dropout(dropout)
+        
 
     def forward(self, x, target=None):
         if target is not None:
@@ -246,15 +253,25 @@ class DeepSoftHebb(nn.Module):
         # block 3
         out = self.pool3(self.activ3(self.conv3(self.bn3(out))))
         # block 4
-        if self.use_neuron_centric:
-            return self.classifier(self.dropout(self.flatten(out))  , target)
+        if self.neuron_centric:
+            return self.classifier(self.dropout(self.flatten(out)), target)
         else:
             return self.classifier(self.dropout(self.flatten(out)))
         
+    def bn_eval(self):
+        self.bn1.eval()
+        self.bn2.eval()
+        self.bn3.eval()
+        
     def train(self, mode=True):
-        if self.use_neuron_centric:
-            super().train(mode)
+        if self.neuron_centric:
+            self.dropout.train(mode)
+            self.classifier.train(mode)
+            self.conv1.train(mode)
+            self.conv2.train(mode)
+            self.conv3.train(mode)
         else:
+            self.dropout.train(mode)
             self.classifier.train(mode)
 
     def unsupervised_train(self):
@@ -280,3 +297,52 @@ class Triangle(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         input = input - torch.mean(input.data, axis=1, keepdims=True)
         return F.relu(input, inplace=self.inplace) ** self.power
+    
+
+
+class FastCIFAR10(torchvision.datasets.CIFAR10):
+    """
+    Improves performance of training on CIFAR10 by removing the PIL interface and pre-loading on the GPU (2-3x speedup).
+
+    Taken from https://github.com/y0ast/pytorch-snippets/tree/main/fast_mnist
+    """
+
+    def __init__(self, *args, **kwargs):
+        device = kwargs.pop('device', "cpu")
+        super().__init__(*args, **kwargs)
+
+        self.data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
+        self.data = torch.movedim(self.data, -1, 1)  # -> set dim to: (batch, channels, height, width)
+        self.targets = torch.tensor(self.targets, device=device)
+
+    def __getitem__(self, index: int):
+        """
+        Parameters
+        ----------
+        index : int
+            Index of the element to be returned
+
+        Returns
+        -------
+            tuple: (image, target) where target is the index of the target class
+        """
+        img = self.data[index]
+        target = self.targets[index]
+
+        return img, target
+    
+class CustomStepLR(StepLR):
+    """
+    Custom Learning Rate schedule with step functions for supervised training of linear readout (classifier)
+    """
+
+    def __init__(self, optimizer, nb_epochs):
+        threshold_ratios = [0.2, 0.35, 0.5, 0.6, 0.7, 0.8, 0.9]
+        self.step_thresold = [int(nb_epochs * r) for r in threshold_ratios]
+        super().__init__(optimizer, -1, False)
+
+    def get_lr(self):
+        if self.last_epoch in self.step_thresold:
+            return [group['lr'] * 0.5
+                    for group in self.optimizer.param_groups]
+        return [group['lr'] for group in self.optimizer.param_groups]
