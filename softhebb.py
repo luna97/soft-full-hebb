@@ -22,7 +22,7 @@ import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
@@ -133,7 +133,6 @@ if __name__ == "__main__":
             inputs, targets = data
             inputs = inputs.to(device)
             targets = targets.to(device)
-
 
             if args.neuron_centric:
                 outputs = model(inputs, targets)
