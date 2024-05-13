@@ -41,6 +41,7 @@ parser.add_argument('--augment_data', action='store_true', help='use data augmen
 parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
 parser.add_argument('--neuron_centric', action='store_true', help='use neuron-centric learning')
 parser.add_argument('--unsupervised_first', action='store_true', help='unsupervised training first')
+parser.add_argument('--learn_t_invert', action='store_true', help='learn temperature')
 args = parser.parse_args()
 
 print("Using neuron-centric learning" if args.neuron_centric else "Using softhebb original learning")
@@ -67,7 +68,8 @@ if __name__ == "__main__":
         dropout=args.dropout, 
         input_size=input_size, 
         neuron_centric=args.neuron_centric,
-        unsupervised_first=args.unsupervised_first
+        unsupervised_first=args.unsupervised_first,
+        learn_t_invert=args.learn_t_invert
     ).to(device)
     model.train()
 
@@ -93,8 +95,8 @@ if __name__ == "__main__":
     # Unsupervised training with SoftHebb
     total = len(train_dataloader)
 
-    best_model = None
-    best_val_acc = 0.0
+    # best_model = None
+    best_val_f1 = 0.0
 
     # show the full dataset to the model before training
     if args.unsupervised_first:
@@ -136,6 +138,8 @@ if __name__ == "__main__":
             inputs = inputs.to(device)
             targets = targets.to(device)
 
+            optimizer.zero_grad()
+
             if args.neuron_centric:
                 outputs = model(inputs, targets)
             else:
@@ -146,7 +150,6 @@ if __name__ == "__main__":
             if loss.grad_fn is not None:
                 loss.backward()
                 optimizer.step()
-                optimizer.zero_grad()
 
             running_loss += loss.item()
             train_total += targets.size(0)
@@ -192,11 +195,12 @@ if __name__ == "__main__":
         print(f"Train Loss: {running_loss / train_total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
         print(f"Val Loss: {val_loss / total_val:.4f}, Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
 
-        if best_val_acc < acc:
-            best_val_acc = acc
-            best_model = model.state_dict()
-            if args.save_model:
-                torch.save(best_model, "best_model.pth")
+        if f1 >= best_val_f1:
+            best_val_f1 = f1
+            # best_model = model.save()
+            print(f"Best model at epoch: {e}")
+            # if args.save_model:
+            torch.save(model, "best_model.pth")
 
         if args.log:
             wandb.log({
@@ -208,7 +212,8 @@ if __name__ == "__main__":
                 "Training F1 score": f1_train
             })
 
-    model.load_state_dict(best_model)
+    print(f"loading best model for testing")
+    model = torch.load("best_model.pth")
 
     # Test loop
     model.eval()

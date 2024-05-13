@@ -20,7 +20,8 @@ class SoftHebbConv2d(nn.Module):
             initial_lr: float = 0.01,
             device = 'cpu',
             first_layer=False,
-            neuron_centric=False
+            neuron_centric=False,
+            learn_t_invert=False
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -38,7 +39,12 @@ class SoftHebbConv2d(nn.Module):
         self.groups = groups
         self.padding_mode = 'reflect'
         self.F_padding = (padding, padding, padding, padding)
-        self.t_invert = torch.tensor(t_invert)
+
+        if learn_t_invert:
+            self.t_invert = nn.Parameter(torch.tensor(t_invert))
+        else:
+            self.t_invert = torch.tensor(t_invert)
+        
         self.initial_lr = initial_lr
         self.weight_norm_dep = 1
         self.first_layer = first_layer
@@ -51,7 +57,7 @@ class SoftHebbConv2d(nn.Module):
 
         if self.neuron_centric:
             nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
-            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.1, requires_grad=True)
+            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * 0.01, requires_grad=True)
             self.Cj = nn.Parameter(torch.ones(out_channels) * 0.01, requires_grad=True)
             self.Ck1 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
             self.Ck2 = nn.Parameter(torch.ones(kernel_size) * 0.01, requires_grad=True)
@@ -61,7 +67,7 @@ class SoftHebbConv2d(nn.Module):
         
         if self.training:
             self.weight = self.weight.detach()
-            self.t_invert = self.t_invert.detach()
+            # self.t_invert = self.t_invert.detach()
 
             weighted_input = F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
 
@@ -75,12 +81,13 @@ class SoftHebbConv2d(nn.Module):
             flat_weighted_inputs = weighted_input.transpose(0, 1).reshape(out_channels, -1)
             flat_softwta_activs = torch.softmax(self.t_invert * flat_weighted_inputs, dim=0)
 
-            # Compute the winner neuron for each batch element and pixel
-            flat_softwta_activs = - flat_softwta_activs  # Turn all postsynaptic activations into anti-Hebbian
-            win_neurons = torch.argmax(flat_weighted_inputs, dim=0)  # winning neuron for each pixel in each input
-            competing_idx = torch.arange(flat_weighted_inputs.size(1))  # indeces of all pixel-input elements
-            # Turn winner neurons' activations back to hebbian
-            flat_softwta_activs[win_neurons, competing_idx] = - flat_softwta_activs[win_neurons, competing_idx]
+            if True:
+                # Compute the winner neuron for each batch element and pixel
+                flat_softwta_activs = - flat_softwta_activs  # Turn all postsynaptic activations into anti-Hebbian
+                win_neurons = torch.argmax(flat_weighted_inputs, dim=0)  # winning neuron for each pixel in each input
+                competing_idx = torch.arange(flat_weighted_inputs.size(1))  # indeces of all pixel-input elements
+                # Turn winner neurons' activations back to hebbian
+                flat_softwta_activs[win_neurons, competing_idx] = - flat_softwta_activs[win_neurons, competing_idx]
 
             softwta_activs = flat_softwta_activs.view(out_channels, batch_size, height_out, width_out).transpose(0, 1)
             # ===== compute plastic update Δw = y*(x - u*w) = y*x - (y*u)*w =======================================
@@ -98,7 +105,7 @@ class SoftHebbConv2d(nn.Module):
 
             # sum over batch, output pixels: each kernel element will influence all batches and output pixels.
             yu = torch.sum(torch.mul(softwta_activs, weighted_input), dim=(0, 2, 3))
-            delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight.clone().detach()
+            delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight.detach()
             delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
 
             if self.neuron_centric:
@@ -107,8 +114,11 @@ class SoftHebbConv2d(nn.Module):
                 eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr   
 
-            self.weight = self.weight + delta_weight.detach() * eta 
+            self.weight = self.weight + delta_weight * eta 
             self.weight = self.weight.clip(-10, 10)
+            # if self.t_invert < 100 and self.t_invert > 0.01:
+                # self.t_invert *= 1.01
+                # self.t_invert *= 0.999
 
         return F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
         
@@ -118,7 +128,6 @@ class SoftHebbLinear(nn.Module):
             self,
             in_channels: int,
             out_channels: int,
-            t_invert: float = 1,
             device = 'cpu',
             activation = None,
     ) -> None:
@@ -139,10 +148,8 @@ class SoftHebbLinear(nn.Module):
 
         self.register_buffer('weight', weight)
 
-        self.t_invert = torch.tensor(t_invert)
-        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.01, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.1, requires_grad=True)
         self.Cj = nn.Parameter(torch.ones(out_channels, 1) * 0.01, requires_grad=True)
-
 
     def forward(self, x, target = None):
         # x = x / x.norm(dim=1, keepdim=True)
@@ -150,10 +157,9 @@ class SoftHebbLinear(nn.Module):
         if self.training and target is not None: 
             # clean gradients
             self.weight = self.weight.detach()
-            self.t_invert = self.t_invert.detach()
                         
             xt = target.T @ x
-            out = (out * self.t_invert).softmax(dim=1)
+            out = (out).softmax(dim=1)
             xy = out.T @ x
 
             delta_weight = (xt - xy).detach()
@@ -164,25 +170,10 @@ class SoftHebbLinear(nn.Module):
             return F.linear(x, self.weight)
 
         return out
-    
-    def wanda_prune(self, weight, input, ratio):
-        """
-        Prune the weights of the network
-        :param weight: the weight matrix of the network
-        :param input: the input matrix of the network
-        :param ratio: the ratio of the weights to be pruned, if set to 0.0 all weights will be pruned
-        :return: the pruned weight matrix
-        """
-        metric = weight.abs() * input.norm(dim=0)
-
-        sorted_idx = torch.sort(metric, dim=1).indices
-        pruned_idx = sorted_idx[:, :int(weight.shape[0] * ratio)]
-        weight.scatter_(dim=1, index=pruned_idx, src=torch.zeros_like(weight))
-        return weight
 
 
 class DeepSoftHebb(nn.Module):
-    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False, unsupervised_first=False):
+    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False, unsupervised_first=False, learn_t_invert=False):
         super(DeepSoftHebb, self).__init__()
         # block 1
         self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
@@ -191,13 +182,14 @@ class DeepSoftHebb(nn.Module):
             out_channels=96, 
             kernel_size=5, 
             padding=2, 
-            t_invert=1, 
+            t_invert=1., 
             device=device, 
             initial_lr=0.08, 
             first_layer=True,
-            neuron_centric=neuron_centric and not unsupervised_first
+            neuron_centric=neuron_centric and not unsupervised_first,
+            learn_t_invert=learn_t_invert
         )
-        self.activ1 = Triangle(power=0.7) #nn.ReLU() #
+        self.activ1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
 
         # block 2
@@ -207,12 +199,13 @@ class DeepSoftHebb(nn.Module):
             out_channels=384,
             kernel_size=3, 
             padding=1, 
-            t_invert=0.65, 
+            t_invert=1., 
             device=device, 
             initial_lr=0.005,
-            neuron_centric=neuron_centric and not unsupervised_first
+            neuron_centric=neuron_centric and not unsupervised_first,
+            learn_t_invert=learn_t_invert
         )
-        self.activ2 = Triangle(power=1.4) #nn.ReLU() # 
+        self.activ2 = nn.ReLU() 
         self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
         # block 3
 
@@ -222,19 +215,20 @@ class DeepSoftHebb(nn.Module):
             out_channels=1536,
             kernel_size=3, 
             padding=1, 
-            t_invert=0.25, 
+            t_invert=1., 
             device=device,
             initial_lr=0.01,
-            neuron_centric=neuron_centric and not unsupervised_first
+            neuron_centric=neuron_centric and not unsupervised_first,
+            learn_t_invert=learn_t_invert
         )
 
-        self.activ3 = Triangle(power=1.) #nn.ReLU() #
+        self.activ3 = nn.ReLU() #Triangle(power=1.) #
         self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         # block 4
         self.flatten = nn.Flatten()
 
         if neuron_centric:
-            self.classifier = SoftHebbLinear((input_size // 2) * 1536, 10, device=device, t_invert=1)
+            self.classifier = SoftHebbLinear((input_size // 2) * 1536, 10, device=device)
         else:
             self.classifier = nn.Linear((input_size // 2) * 1536, 10)
             self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, (input_size // 2) * 1536)
@@ -243,7 +237,6 @@ class DeepSoftHebb(nn.Module):
         self.unsupervised_first = unsupervised_first
         self.dropout = nn.Dropout(dropout)
         
-
     def forward(self, x, target=None):
         if target is not None:
             target = F.one_hot(target, 10).float().to(x.device) # - 0.1
@@ -267,6 +260,7 @@ class DeepSoftHebb(nn.Module):
         self.bn2.eval()
         self.bn3.eval()
     
+
 class Triangle(nn.Module):
     def __init__(self, power: float = 1, inplace: bool = True):
         super(Triangle, self).__init__()
