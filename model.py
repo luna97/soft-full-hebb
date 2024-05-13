@@ -6,6 +6,27 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import StepLR
 import torchvision
 
+CLIP = "clip"
+L2NORM = "l2norm"
+L1NORM = "l1norm"
+MAXNORM = "maxnorm"
+NONORM = "nonorm"
+
+def normalize_weights(weights, norm_type, dim=0):
+    if norm_type == CLIP:
+        return weights.clip(-1, 1)
+    elif norm_type == L2NORM:
+        return weights / (torch.linalg.norm(weights, dim=dim, ord=2) + 1e-30)
+    elif norm_type == L1NORM:
+        return weights / (torch.linalg.norm(weights, dim=dim, ord=1) + 1e-30)
+    elif norm_type == MAXNORM:
+        return weights / (torch.abs(weights).amax() + 1e-30)
+    elif norm_type == NONORM:
+        return weights
+    else:
+        raise ValueError(f"Invalid norm type: {norm_type}")
+
+
 class SoftHebbConv2d(nn.Module):
     def __init__(
             self,
@@ -21,7 +42,8 @@ class SoftHebbConv2d(nn.Module):
             device = 'cpu',
             first_layer=False,
             neuron_centric=False,
-            learn_t_invert=False
+            learn_t_invert=False,
+            norm_type=CLIP,
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -39,6 +61,7 @@ class SoftHebbConv2d(nn.Module):
         self.groups = groups
         self.padding_mode = 'reflect'
         self.F_padding = (padding, padding, padding, padding)
+        self.norm_type = norm_type
 
         if learn_t_invert:
             self.t_invert = nn.Parameter(torch.tensor(t_invert))
@@ -115,10 +138,8 @@ class SoftHebbConv2d(nn.Module):
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr   
 
             self.weight = self.weight + delta_weight * eta 
-            self.weight = self.weight.clip(-10, 10)
-            # if self.t_invert < 100 and self.t_invert > 0.01:
-                # self.t_invert *= 1.01
-                # self.t_invert *= 0.999
+            self.weight = normalize_weights(self.weight, self.norm_type, dim=0)
+            
 
         return F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
         
@@ -129,7 +150,7 @@ class SoftHebbLinear(nn.Module):
             in_channels: int,
             out_channels: int,
             device = 'cpu',
-            activation = None,
+            norm_type=CLIP,
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -140,15 +161,14 @@ class SoftHebbLinear(nn.Module):
         super(SoftHebbLinear, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-
-        self.act = activation
+        self.norm_type = norm_type
         
         weight = torch.empty((out_channels, in_channels)).requires_grad_(False).to(device)
         nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
 
         self.register_buffer('weight', weight)
 
-        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.1, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.01, requires_grad=True)
         self.Cj = nn.Parameter(torch.ones(out_channels, 1) * 0.01, requires_grad=True)
 
     def forward(self, x, target = None):
@@ -157,12 +177,13 @@ class SoftHebbLinear(nn.Module):
         if self.training and target is not None: 
             # clean gradients
             self.weight = self.weight.detach()
-                        
-            xt = target.T @ x
             out = (out).softmax(dim=1)
-            xy = out.T @ x
+                        
+            # xt = target.T @ x
+            #xy = out.T @ x
+            # delta_weight = (xt - xy).detach()
 
-            delta_weight = (xt - xy).detach()
+            delta_weight = (target - out).T @ x
             
             self.weight = self.weight + delta_weight.detach() * self.Ci * self.Cj
             # self.weight = self.wanda_prune(self.weight, x, 0.3)
@@ -173,7 +194,17 @@ class SoftHebbLinear(nn.Module):
 
 
 class DeepSoftHebb(nn.Module):
-    def __init__(self, device = 'cpu', in_channels=1, dropout=0.0, input_size=32, neuron_centric=False, unsupervised_first=False, learn_t_invert=False):
+    def __init__(
+            self, 
+            device = 'cpu', 
+            in_channels=1, 
+            dropout=0.0, 
+            input_size=32, 
+            neuron_centric=False, 
+            unsupervised_first=False, 
+            learn_t_invert=False, 
+            norm_type=CLIP
+    ):
         super(DeepSoftHebb, self).__init__()
         # block 1
         self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
@@ -187,7 +218,8 @@ class DeepSoftHebb(nn.Module):
             initial_lr=0.08, 
             first_layer=True,
             neuron_centric=neuron_centric and not unsupervised_first,
-            learn_t_invert=learn_t_invert
+            learn_t_invert=learn_t_invert,
+            norm_type=norm_type
         )
         self.activ1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
@@ -203,7 +235,8 @@ class DeepSoftHebb(nn.Module):
             device=device, 
             initial_lr=0.005,
             neuron_centric=neuron_centric and not unsupervised_first,
-            learn_t_invert=learn_t_invert
+            learn_t_invert=learn_t_invert,
+            norm_type=norm_type
         )
         self.activ2 = nn.ReLU() 
         self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
@@ -219,7 +252,8 @@ class DeepSoftHebb(nn.Module):
             device=device,
             initial_lr=0.01,
             neuron_centric=neuron_centric and not unsupervised_first,
-            learn_t_invert=learn_t_invert
+            learn_t_invert=learn_t_invert,
+            norm_type=norm_type
         )
 
         self.activ3 = nn.ReLU() #Triangle(power=1.) #

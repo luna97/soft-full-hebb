@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from sklearn.metrics import f1_score
-from model import DeepSoftHebb, CustomStepLR
+from model import DeepSoftHebb, CustomStepLR, L1NORM, L2NORM, MAXNORM, CLIP, NONORM
 import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
@@ -27,6 +27,8 @@ torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
 available_datasets = [CIFAR10, MNIST, IMAGENET]
+
+available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
@@ -42,6 +44,7 @@ parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to u
 parser.add_argument('--neuron_centric', action='store_true', help='use neuron-centric learning')
 parser.add_argument('--unsupervised_first', action='store_true', help='unsupervised training first')
 parser.add_argument('--learn_t_invert', action='store_true', help='learn temperature')
+parser.add_argument('--normalization', type=str, default="clip")
 args = parser.parse_args()
 
 print("Using neuron-centric learning" if args.neuron_centric else "Using softhebb original learning")
@@ -50,7 +53,9 @@ if args.dataset.lower() not in available_datasets:
     raise ValueError(f"Dataset {args.dataset} not available. Choose one of {available_datasets}")
 dataset = args.dataset.lower()
 
-
+if args.normalization.lower() not in available_normalizations:
+    raise ValueError(f"Normalization {args.normalization} not available. Choose one of {available_normalizations}")
+normalization = args.normalization.lower()
 
 # Main training loop CIFAR10
 if __name__ == "__main__":
@@ -69,7 +74,8 @@ if __name__ == "__main__":
         input_size=input_size, 
         neuron_centric=args.neuron_centric,
         unsupervised_first=args.unsupervised_first,
-        learn_t_invert=args.learn_t_invert
+        learn_t_invert=args.learn_t_invert,
+        norm_type=normalization
     ).to(device)
     model.train()
 
