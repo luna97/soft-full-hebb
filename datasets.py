@@ -20,7 +20,8 @@ class FastCIFAR10(torchvision.datasets.CIFAR10):
         device = kwargs.pop('device', "cpu")
         super().__init__(*args, **kwargs)
 
-        self.data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
+        data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
+        self.data = transforms.functional.normalize(data, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
         self.data = torch.movedim(self.data, -1, 1)  # -> set dim to: (batch, channels, height, width)
         self.targets = torch.tensor(self.targets, device=device)
 

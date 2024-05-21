@@ -22,7 +22,7 @@ import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 
-# torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
@@ -32,19 +32,21 @@ available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
-parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=0., help='weight decay')
-parser.add_argument('--batch_size', type=int, default=64, help='batch size')
+parser.add_argument('--lr', type=float, default=0.00001, help='learning rate')
+parser.add_argument('--weight_decay', type=float, default=0.001, help='weight decay')
+parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
 parser.add_argument('--save_model', action='store_true', help='save model')
-parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
+# parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
 parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
 parser.add_argument('--neuron_centric', action='store_true', help='use neuron-centric learning')
 parser.add_argument('--unsupervised_first', action='store_true', help='unsupervised training first')
-parser.add_argument('--learn_t_invert', action='store_true', help='learn temperature')
+parser.add_argument('--learn_t', action='store_true', help='learn temperature')
 parser.add_argument('--normalization', type=str, default="clip")
+parser.add_argument('--two_step', action='store_true', help='use two steps learning')
+parser.add_argument('--linear_head', action='store_true', help='use linear head')
 args = parser.parse_args()
 
 print("Using neuron-centric learning" if args.neuron_centric else "Using softhebb original learning")
@@ -74,8 +76,10 @@ if __name__ == "__main__":
         input_size=input_size, 
         neuron_centric=args.neuron_centric,
         unsupervised_first=args.unsupervised_first,
-        learn_t_invert=args.learn_t_invert,
-        norm_type=normalization
+        learn_t_invert=args.learn_t,
+        norm_type=normalization,
+        two_steps=args.two_step,
+        linear_head=args.linear_head
     ).to(device)
     model.train()
 
@@ -144,8 +148,6 @@ if __name__ == "__main__":
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            optimizer.zero_grad()
-
             if args.neuron_centric:
                 outputs = model(inputs, targets)
             else:
@@ -155,7 +157,14 @@ if __name__ == "__main__":
 
             if loss.grad_fn is not None:
                 loss.backward()
+                # count non-zero gradients
+                # print(f"fc grad: {model.classifier.Ci.grad.abs().sum()}")
                 optimizer.step()
+                optimizer.zero_grad()
+
+            if not args.two_step:
+                model.step(targets)    
+
 
             running_loss += loss.item()
             train_total += targets.size(0)
