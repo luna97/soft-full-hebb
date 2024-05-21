@@ -85,9 +85,11 @@ if __name__ == "__main__":
 
     if args.neuron_centric and not args.unsupervised_first:
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        # optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.95, nesterov=True)
         print(f'optimizing {[ name for name, param in model.named_parameters() if param.requires_grad]}')
     else:
         optimizer = AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        # optimizer = SGD(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.95, nesterov=True)
         print(f'optimizing {[ name for name, param in model.classifier.named_parameters() if param.requires_grad]}')
     # add lr scheduler
     if not args.neuron_centric:

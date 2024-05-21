@@ -34,7 +34,7 @@ class SoftHebbConv2d(nn.Module):
             out_channels: int,
             kernel_size: int,
             stride: int = 1,
-            padding: int = 0,
+            padding: int = 1,
             dilation: int = 1,
             groups: int = 1,
             t_invert: float = 1,
@@ -238,16 +238,16 @@ class DeepSoftHebb(nn.Module):
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
+        lol = 96
         self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
-        out_channels_1 = 96
-        out_channels_2 = 96*4
-        out_channels_3 = 96*8
+        out_channels_1 = lol
+        out_channels_2 = lol * 4
+        out_channels_3 = lol * 8
         self.conv1 = SoftHebbConv2d(
             in_channels=in_channels, 
             out_channels=out_channels_1, 
             kernel_size=5, 
             padding=2, 
-            t_invert=1., 
             device=device, 
             initial_lr=0.08, # only for original version
             first_layer=True,
@@ -258,6 +258,7 @@ class DeepSoftHebb(nn.Module):
         )
         self.activ1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
+        out_size = (input_size - 2) // 2 + 1
 
         # block 2
         self.bn2 = nn.BatchNorm2d(out_channels_1, affine=False).requires_grad_(False)
@@ -265,8 +266,6 @@ class DeepSoftHebb(nn.Module):
             in_channels=out_channels_1, 
             out_channels=out_channels_2,
             kernel_size=3, 
-            padding=1, 
-            t_invert=1., 
             device=device, 
             initial_lr=0.005, # only for original version
             neuron_centric=neuron_centric and not unsupervised_first,
@@ -276,15 +275,14 @@ class DeepSoftHebb(nn.Module):
         )
         self.activ2 = nn.ReLU() 
         self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
-        # block 3
+        out_size = (out_size - 2) // 2 + 1
 
+        # block 3
         self.bn3 = nn.BatchNorm2d(out_channels_2, affine=False).requires_grad_(False)
         self.conv3 = SoftHebbConv2d(
             in_channels=out_channels_2, 
             out_channels=out_channels_3,
             kernel_size=3, 
-            padding=1, 
-            t_invert=1., 
             device=device,
             initial_lr=0.01, # only for original version
             neuron_centric=neuron_centric and not unsupervised_first,
@@ -292,16 +290,19 @@ class DeepSoftHebb(nn.Module):
             norm_type=norm_type,
             two_steps=two_steps
         )
-
         self.activ3 = nn.ReLU() #Triangle(power=1.) #
         self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
+        out_size = (out_size - 2) // 2 + 1
+
         # block 4
         self.flatten = nn.Flatten()
 
+        out_dim = (out_size ** 2) * out_channels_3
+
         if neuron_centric and not linear_head:
-            self.classifier = SoftHebbLinear((input_size // 2) * out_channels_3, 10, device=device, two_steps=two_steps)
+            self.classifier = SoftHebbLinear(out_dim, 10, device=device, two_steps=two_steps)
         else:
-            self.classifier = nn.Linear((input_size // 2) * out_channels_3, 10)
+            self.classifier = nn.Linear(out_dim, 10)
             # self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, (input_size // 2) * 1536)
 
         self.neuron_centric = neuron_centric
