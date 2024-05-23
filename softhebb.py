@@ -85,11 +85,11 @@ if __name__ == "__main__":
 
     if args.neuron_centric and not args.unsupervised_first:
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        # optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.95, nesterov=True)
+        # optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
         print(f'optimizing {[ name for name, param in model.named_parameters() if param.requires_grad]}')
     else:
         optimizer = AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        # optimizer = SGD(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.95, nesterov=True)
+        # optimizer = SGD(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
         print(f'optimizing {[ name for name, param in model.classifier.named_parameters() if param.requires_grad]}')
     # add lr scheduler
     if not args.neuron_centric:
@@ -132,7 +132,6 @@ if __name__ == "__main__":
             print("Saving model with keys: ", model.state_dict().keys())
             torch.save(model.state_dict(), "conv_model.pth")
         model.unsupervised_eval()
-
 
     epoch_pbar = tqdm(range(args.epochs))
     for e in epoch_pbar:
@@ -217,7 +216,7 @@ if __name__ == "__main__":
             # best_model = model.save()
             print(f"Best model at epoch: {e}")
             # if args.save_model:
-            torch.save(model, "best_model.pth")
+            torch.save(model, "data/best_model.pth")
 
         if args.log:
             wandb.log({
@@ -230,7 +229,7 @@ if __name__ == "__main__":
             })
 
     print(f"loading best model for testing")
-    model = torch.load("best_model.pth")
+    model = torch.load("data/best_model.pth")
 
     # Test loop
     model.eval()
