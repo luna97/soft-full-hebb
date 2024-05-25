@@ -48,10 +48,9 @@ class SoftHebbLinear(nn.Module):
 
         return tortn
     
-    def step(self, target):
+    def step(self, target=None):
         if self.training and target is not None: 
             # clean gradients
-            
             self.weight = self.weight.detach()
             out = (self.out).softmax(dim=1)
 

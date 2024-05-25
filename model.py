@@ -33,9 +33,9 @@ class DeepSoftHebb(nn.Module):
         k_size_1, k_size_2, k_size_3 = 5, 3, 3
         stride_1, stride_2, stride_3 = 1, 1, 1
         padding_1, padding_2, padding_3 = 2, 1, 1
-        pool_k_size_1, pool_k_size_2, pool_k_size_3 = 2, 2, 2
-        pool_stride_1, pool_stride_2, pool_stride_3 = 1, 1, 1
-        pool_padding_1, pool_padding_2, pool_padding_3 = 0, 0, 0
+        pool_k_size_1, pool_k_size_2, pool_k_size_3 = 4, 4, 2
+        pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
+        pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
 
         self.conv1 = SoftHebbConv2d(
             in_channels=in_channels, 
@@ -94,12 +94,13 @@ class DeepSoftHebb(nn.Module):
             two_steps=two_steps
         )
         self.activ3 = nn.ReLU() #Triangle(power=1.) #
-        self.pool3 = nn.MaxPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
+        self.pool3 = nn.AvgPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
         out_size = (out_size - k_size_3 + 2 * padding_3) // stride_3 + 1
         out_size = (out_size - pool_k_size_3 + 2 * pool_padding_3) // pool_stride_3 + 1
         print(out_size)
         # out_size *= 2
         out_dim = (out_size ** 2) * out_channels_3
+        print(out_dim)
 
         # block 4
         self.flatten = nn.Flatten()
