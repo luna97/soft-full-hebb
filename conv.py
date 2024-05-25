@@ -12,7 +12,7 @@ class SoftHebbConv2d(nn.Module):
             out_channels: int,
             kernel_size: int,
             stride: int = 1,
-            padding: int = 1,
+            padding: int = 0,
             dilation: int = 1,
             groups: int = 1,
             t_invert: float = 1.,
@@ -52,8 +52,6 @@ class SoftHebbConv2d(nn.Module):
         self.neuron_centric = neuron_centric
         self.two_steps = two_steps
 
-        self.momentum = None
-
         weight_range = 25 / math.sqrt((in_channels / groups) * kernel_size * kernel_size)
         weight = weight_range * torch.randn((out_channels, in_channels // groups, *self.kernel_size)).requires_grad_(False).to(device)
 
@@ -61,10 +59,10 @@ class SoftHebbConv2d(nn.Module):
 
         if self.neuron_centric:
             nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
-            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * .1, requires_grad=True)
-            self.Cj = nn.Parameter(torch.ones(out_channels) * .1, requires_grad=True)
-            self.Ck1 = nn.Parameter(torch.ones(kernel_size) * .1, requires_grad=True)
-            self.Ck2 = nn.Parameter(torch.ones(kernel_size) * .1, requires_grad=True)
+            self.Ci = nn.Parameter(torch.ones(in_channels // groups) * .01, requires_grad=True)
+            self.Cj = nn.Parameter(torch.ones(out_channels) * .01, requires_grad=True)
+            self.Ck1 = nn.Parameter(torch.ones(kernel_size) * .01, requires_grad=True)
+            self.Ck2 = nn.Parameter(torch.ones(kernel_size) * .01, requires_grad=True)
 
     def forward(self, x):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
@@ -120,6 +118,7 @@ class SoftHebbConv2d(nn.Module):
             # Use Convolutions to apply the plastic update. Sweep over inputs with postynaptic activations.
             # Each weighting of an input pixel & an activation pixel updates the kernel element that connected them in
             # the forward pass.
+            
             yx = F.conv2d(
                 self.x.transpose(0, 1),  # (B, IC, IH, IW) -> (IC, B, IH, IW)
                 softwta_activs.transpose(0, 1),  # (B, OC, OH, OW) -> (OC, B, OH, OW)
@@ -143,12 +142,8 @@ class SoftHebbConv2d(nn.Module):
                 eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr   
 
-            if self.momentum is None:
-                self.momentum = delta_weight
-            else:
-                self.momentum = 0.9 * self.momentum.detach() + 0.1 * delta_weight
 
-            self.weight = self.weight.detach() + self.momentum * eta 
+            self.weight = self.weight.detach() + delta_weight * eta 
             self.weight = normalize_weights(self.weight, self.norm_type, dim=0)
             self.x = None
             self.out = None
