@@ -15,12 +15,14 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from sklearn.metrics import f1_score
-from model import DeepSoftHebb, CustomStepLR, L1NORM, L2NORM, MAXNORM, CLIP, NONORM
+from model import DeepSoftHebb
 import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
+from utils import CustomStepLR
+from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM
 
 # torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
