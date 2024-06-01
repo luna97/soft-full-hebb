@@ -15,28 +15,34 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from sklearn.metrics import f1_score
-from model import DeepSoftHebb
+from model import DeepSoftHebb, CONV, LINEAR, LinearSofHebb
 import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from utils import CustomStepLR
-from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM
+from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
-available_datasets = [CIFAR10, MNIST, IMAGENET]
+SGD = 'sgd'
+ADAMW = 'adamw'
+MOMENTUM = 'momentum'
 
-available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM]
+available_datasets = [CIFAR10, MNIST, IMAGENET]
+available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
+available_optimizers = [SGD, ADAMW, MOMENTUM]
+
+device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
 parser.add_argument('--lr', type=float, default=0.00001, help='learning rate')
 parser.add_argument('--weight_decay', type=float, default=0.001, help='weight decay')
-parser.add_argument('--batch_size', type=int, default=32, help='batch size')
+parser.add_argument('--batch_size', type=int, default=64, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
@@ -49,50 +55,72 @@ parser.add_argument('--learn_t', action='store_true', help='learn temperature')
 parser.add_argument('--normalization', type=str, default="clip")
 parser.add_argument('--two_step', action='store_true', help='use two steps learning')
 parser.add_argument('--linear_head', action='store_true', help='use linear head')
+parser.add_argument('--net_type', type=str, default=CONV, help='network type')
+parser.add_argument('--device', type=str, default=device, help='device to use')
+parser.add_argument('--optimizer', type=str, default='adamw', help='optimizer to use')
 args = parser.parse_args()
 
-print("Using neuron-centric learning" if args.neuron_centric else "Using softhebb original learning")
+device = args.device
 
 if args.dataset.lower() not in available_datasets:
     raise ValueError(f"Dataset {args.dataset} not available. Choose one of {available_datasets}")
 dataset = args.dataset.lower()
 
+if args.net_type.lower() not in [CONV, LINEAR]:
+    raise ValueError(f"Network type {args.net_type} not available. Choose one of {CONV}, {LINEAR}")
+
 if args.normalization.lower() not in available_normalizations:
     raise ValueError(f"Normalization {args.normalization} not available. Choose one of {available_normalizations}")
 normalization = args.normalization.lower()
 
+if args.optimizer.lower() not in available_optimizers:
+    raise ValueError(f"Optimizer {args.optimizer} not available. Choose one of {available_optimizers}")
+
 # Main training loop CIFAR10
 if __name__ == "__main__":
     if args.log: wandb.init(
-        project="softhebb-cifar10",
+        project=f"softhebb-{dataset}-{args.net_type}",
         config=vars(args),
     )
         
-    device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
     in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
     input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
-    model = DeepSoftHebb(
-        device=device,
-        in_channels=in_channels, 
-        dropout=args.dropout, 
-        input_size=input_size, 
-        neuron_centric=args.neuron_centric,
-        unsupervised_first=args.unsupervised_first,
-        learn_t_invert=args.learn_t,
-        norm_type=normalization,
-        two_steps=args.two_step,
-        linear_head=args.linear_head
-    ).to(device)
+
+    if args.net_type == LINEAR:
+        model = LinearSofHebb(
+            in_channels=in_channels,
+            norm_type=normalization,
+            two_steps=args.two_step,
+            device=device,
+            dropout=args.dropout,
+            input_size=input_size
+        ).to(device)
+    else:
+        model = DeepSoftHebb(
+            device=device,
+            in_channels=in_channels, 
+            dropout=args.dropout, 
+            input_size=input_size, 
+            neuron_centric=args.neuron_centric,
+            unsupervised_first=args.unsupervised_first,
+            learn_t_invert=args.learn_t,
+            norm_type=normalization,
+            two_steps=args.two_step,
+            linear_head=args.linear_head
+        ).to(device)
+
     model.train()
 
-    if args.neuron_centric and not args.unsupervised_first:
-        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        # optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
-        print(f'optimizing {[ name for name, param in model.named_parameters() if param.requires_grad]}')
+    params_to_optimize = model.parameters() if args.neuron_centric and not args.unsupervised_first else model.classifier.parameters()
+
+    if args.optimizer.lower() == ADAMW:
+        optimizer = AdamW(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer.lower() == MOMENTUM:
+        optimizer = optim.SGD(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
     else:
-        optimizer = AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        # optimizer = SGD(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
-        print(f'optimizing {[ name for name, param in model.classifier.named_parameters() if param.requires_grad]}')
+        optimizer = optim.SGD(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay)
+    # print(f'optimizing {[name for name, param in params_to_optimize if param.requires_grad]}')
+
     # add lr scheduler
     if not args.neuron_centric:
         scheduler = CustomStepLR(optimizer, nb_epochs=50)
@@ -105,6 +133,8 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True) 
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False) 
+
+    print(f"Training on {dataset} with {len(train_dataset)} training samples, {len(val_dataset)} validation samples, and {len(test_dataset)} test samples")
 
     # Unsupervised training with SoftHebb
     total = len(train_dataloader)

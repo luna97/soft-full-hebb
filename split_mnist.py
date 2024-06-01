@@ -6,7 +6,7 @@ from model import DeepSoftHebb, CLIP
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from tqdm import tqdm
 from sklearn.metrics import f1_score
-from utility import evaluate
+from utils import evaluate
 
 # set seed for reproducibility
 torch.manual_seed(42)

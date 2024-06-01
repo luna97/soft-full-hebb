@@ -3,9 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from utils import normalize_weights, CLIP
 
-  
+import torch.nn.grad
+from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, SOFTMAX
+
 class SoftHebbLinear(nn.Module):
     def __init__(
             self,
@@ -13,7 +14,8 @@ class SoftHebbLinear(nn.Module):
             out_channels: int,
             device = 'cpu',
             norm_type=CLIP,
-            two_steps=False
+            two_steps=False,
+            last_layer=False
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -32,46 +34,125 @@ class SoftHebbLinear(nn.Module):
         self.register_buffer('weight', weight)
         self.momentum = None
 
-        self.Ci = nn.Parameter(torch.ones(1, in_channels) * 0.01, requires_grad=True)
-        self.Cj = nn.Parameter(torch.ones(out_channels, 1) * 0.01, requires_grad=True)
+        self.Ci = nn.Parameter(torch.ones(1, in_channels), requires_grad=True)
+        self.Cj = nn.Parameter(torch.ones(out_channels, 1), requires_grad=True)
         self.two_steps = two_steps
+        self.credit = torch.ones(in_channels).requires_grad_(False).to(device)
+        self.last_layer = last_layer
 
-    def forward(self, x, target = None):
+    def forward(self, x, target = None, credit = None):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
         tortn = F.linear(x, self.weight)
         self.x = x.clone().detach()
         self.out = tortn.clone().detach()
 
+        # if credit is not None:
+        #    self.update_credit(credit)
+
         if self.two_steps:
-            self.step(target)
+            self.step(target, credit)
             return F.linear(x, self.weight)
 
         return tortn
     
-    def step(self, target=None):
-        if self.training and target is not None: 
-            # clean gradients
+    def step(self, target=None, credit=None):
+        if self.training:
             self.weight = self.weight.detach()
-            out = (self.out).softmax(dim=1)
+            eta = self.Ci * self.Cj * 0.001
 
-            # out[out.max(dim=1).values < 0.2] = 0.
-                        
-            if target.shape[-1] != 10:
+            #if target is not None and target.shape[-1] != 10:
+                
+
+            if target is not None and self.last_layer: 
                 target = torch.functional.F.one_hot(target, 10).float().to(self.x.device)
-
-            delta_weight = (target - out).T @ self.x # / self.x .shape[0]
-            eta = self.Ci * self.Cj
-            # delta_weight = delta_weight * eta
-
-            if self.momentum is None:
-                self.momentum = delta_weight
+                dw = self.target_update_rule(target)
+                # self.update_credit(target)
             else:
-                self.momentum = 0.9 * self.momentum.detach() + 0.1 * delta_weight
+                dw = self.update_rule(target=target)
+                # dw = self.credit_update_rule(credit)
+                # self.update_credit(credit)
+                # dw = self.update_rule()
+            
+            if self.momentum is not None:
+                self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
+            else:
+                self.momentum = dw.detach()
+            
+            self.weight = self.weight + self.momentum.detach() * eta
+            #self.weight = self.weight + dw.detach() * eta
+            self.weight = normalize_weights(self.weight, self.norm_type, dim=0)
 
-            self.weight = self.weight + self.momentum * eta # - 0.001 * self.weight ** 2
-            self.weight = normalize_weights(self.weight, self.norm_type, dim=1)
-            # self.weight = self.weight.clip(-10, 10)
-            # return F.linear(x, self.weight)
             self.x = None
             self.out = None
 
+    def target_update_rule(self, target):
+        out = (self.out).softmax(dim=1)
+        return (target - out).T @ self.x # / self.out.shape[0]
+
+    def update_rule(self, target):
+        self.out = F.tanh(self.out)
+        # self.out = 1 - torch.tanh(self.out) ** 2
+
+        similarity = (self.out) @ (self.out).T # [batch, batch]
+        out_norm = torch.linalg.norm(self.out, dim=1, ord=2) # [batch]
+        similarity = similarity / (out_norm[:, None] * out_norm[None, :]) # [batch, batch]
+
+        diag = torch.diag(torch.diag(similarity)) # [batch, batch]
+        similarity = similarity - diag # [batch, batch]
+        batch_size = similarity.shape[0]
+
+        # Create masks based on class labels
+        positive_mask = (target.unsqueeze(1) == target.unsqueeze(0)).float()
+        negative_mask = 1.0 - positive_mask
+        eye_mask = torch.eye(batch_size).to(positive_mask.device)
+        # mask = torch.ones_like(positive_mask) - eye_mask
+
+        # Ensure no self-similarity is considered
+        positive_mask -= eye_mask
+        out_norm_matrix = out_norm[:, None] * out_norm[None, :]
+
+        grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
+        grad_similarity = grad_similarity / (out_norm_matrix + 1e-8)
+        grad_out = grad_similarity @ self.out #* tanh_derivative
+        grad_weight = grad_out.T @ self.x
+        #print(grad_weight)
+        return - grad_weight / batch_size #- self.weight * self.weight.norm() * 0.0001
+
+        grad_dw = - grad_weight / batch_size
+        soft = F.softmax(self.out, dim=1)
+        max_idx = torch.argmax(soft, dim=1)
+        soft[torch.arange(soft.shape[0]), max_idx] *= -1
+        soft_dw = -soft.T @ (self.x) / batch_size
+        # cos_dw = self.out.T @ self.x / batch_size
+        return grad_dw # + soft_dw
+    
+    
+    def credit_update_rule(self, credit):
+        balance = balanced_credit_fn(self.out) # [batch, out_channels]
+        c_bal = credit[None, :] * balance # [batch, out_channels]
+
+        # this is equal to the backward pass of a linear layer for the weights
+        #return - c_bal.T @ self.x / self.out.shape[0]
+        return torch.zeros_like(self.weight)
+
+    
+
+    def update_credit(self, credit):
+        with torch.no_grad():
+            if self.weight.shape[0] == 10:
+                c_bal = credit - self.out # F.softmax(self.out, dim=1)
+            else:
+                balance = balanced_credit_fn(self.out) # [batch, out_channels]
+                c_bal = credit[None, :] * balance # [batch, out_channels]
+
+            # this is equal to the backward pass of a linear layer for the inputs
+            J = c_bal @ self.weight # [batch, in_channels]
+            
+            self.credit = J.mean(dim=0)
+            self.credit = normalize_weights(self.credit, L1NORM, dim=0)
+            
+
+def morlet(x, w=6.2):
+    b = torch.exp(-0.5 * x ** 2)
+    a = (torch.pi ** (-1/4)) * (1 + torch.e**(-w**2) - 2 * torch.e ** ((-3/4) * w**2)) ** 0.5
+    return a * torch.e**(-0.5 * w ** 2) * (torch.sin(w * x) - b)
