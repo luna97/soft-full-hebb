@@ -91,9 +91,9 @@ class SoftHebbConv2d(nn.Module):
                 dw = self.credit_update_rule(credit)
                 self.update_credit(credit)
             elif target is not None:
-                
-                dw = self.update_rule_sample(target=target)
+                # dw = self.regularize_orthogonality() * 0.01
                 # dw = self.update_rule_channel(target=target)
+                dw = self.update_rule_sample(target=target)
                 #dw = (dw1 + dw2) / 2
   
             if self.neuron_centric:
@@ -106,15 +106,15 @@ class SoftHebbConv2d(nn.Module):
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr  
 
 
-            if self.momentum is None:
-                self.momentum = dw
-            else:
-                self.momentum = 0.9 * self.momentum + 0.1 * dw 
+            # if self.momentum is None:
+            #    self.momentum = dw
+            #else:
+            #    self.momentum = 0.9 * self.momentum + 0.1 * dw 
 
             # print(self.momentum.norm())
             # reg = self.regularize_orthogonality()
-            self.weight = self.weight + (self.momentum.detach())* eta * 0.001 
-            #self.weight = self.weight + dw.detach() * eta * 0.001
+            # self.weight = self.weight + (self.momentum.detach())* eta * 0.001 
+            self.weight = self.weight + dw.detach() * eta * 0.0001
             # print(eta.norm())
             self.weight = normalize_weights(self.weight, self.norm_type, dim=[2, 3])
             self.x = None

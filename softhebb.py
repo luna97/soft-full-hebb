@@ -57,7 +57,9 @@ parser.add_argument('--two_step', action='store_true', help='use two steps learn
 parser.add_argument('--linear_head', action='store_true', help='use linear head')
 parser.add_argument('--net_type', type=str, default=CONV, help='network type')
 parser.add_argument('--device', type=str, default=device, help='device to use')
-parser.add_argument('--optimizer', type=str, default='adamw', help='optimizer to use')
+parser.add_argument('--optimizer', type=str, default=ADAMW, help='optimizer to use')
+parser.add_argument('--initial_lr', type=float, default=0.001, help='initial learning rate')
+parser.add_argument('--no_momentum', action='store_true', help='use momentum')
 args = parser.parse_args()
 
 device = args.device
@@ -93,7 +95,9 @@ if __name__ == "__main__":
             two_steps=args.two_step,
             device=device,
             dropout=args.dropout,
-            input_size=input_size
+            input_size=input_size,
+            initial_lr=args.initial_lr,
+            use_momentum=not args.no_momentum
         ).to(device)
     else:
         model = DeepSoftHebb(
@@ -126,7 +130,7 @@ if __name__ == "__main__":
         scheduler = CustomStepLR(optimizer, nb_epochs=50)
 
     print("Parameters that requires grad: ", [name for name, param in model.named_parameters() if param.requires_grad])
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(reduction='mean')
 
     dataset_base, train_dataset, val_dataset, test_dataset = get_datasets(dataset)
 
@@ -205,7 +209,7 @@ if __name__ == "__main__":
             train_targets.append(targets.detach().cpu())
             train_correct.append(predicted.detach().cpu())
             correct += (predicted == targets).sum().item()
-            pbar.set_description(f"Train Loss: {running_loss / train_total:.4f}")
+            pbar.set_description(f"Train Loss: {running_loss / (i + 1):.4f}")
 
         if not args.neuron_centric:
             scheduler.step()
@@ -240,8 +244,8 @@ if __name__ == "__main__":
                 
         acc = correct / total_val
         f1 = f1_score(torch.cat(val_targets), torch.cat(val_correct), average='macro')
-        print(f"Train Loss: {running_loss / train_total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
-        print(f"Val Loss: {val_loss / total_val:.4f}, Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
+        print(f"Train Loss: {running_loss / total:.4f}, Train Acc: {acc_train:.4f}, Train F1: {f1_train:.4f}")
+        print(f"Val Loss: {val_loss / len(val_dataloader):.4f}, Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
 
         if f1 >= best_val_f1:
             best_val_f1 = f1
@@ -252,10 +256,10 @@ if __name__ == "__main__":
 
         if args.log:
             wandb.log({
-                "Validation Loss": val_loss / total_val,
+                "Validation Loss": val_loss / len(val_dataloader),
                 "Validation Accuracy": acc, 
                 "Validation F1 score": f1,
-                "Training Loss": running_loss / train_total,
+                "Training Loss": running_loss / total,
                 "Training Accuracy": acc_train,
                 "Training F1 score": f1_train
             })

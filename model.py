@@ -27,7 +27,7 @@ class DeepSoftHebb(nn.Module):
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
-        lol = 16
+        lol = 96
         out_channels_1 = lol
         out_channels_2 = out_channels_1 * 2
         out_channels_3 = out_channels_2 * 2
@@ -181,6 +181,8 @@ class LinearSofHebb(nn.Module):
             input_size=32, 
             norm_type=CLIP,
             two_steps=False,
+            use_momentum=False,
+            initial_lr=0.001
     ):
         super(LinearSofHebb, self).__init__()
 
@@ -189,26 +191,32 @@ class LinearSofHebb(nn.Module):
             out_channels=512,
             device=device, 
             two_steps=two_steps, 
-            norm_type=norm_type
+            norm_type=norm_type,
+            initial_lr=initial_lr,
+            use_momentum=use_momentum
         )
-        self.bn1 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
+        # self.bn1 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
 
         self.fc2 = SoftHebbLinear(
             in_channels=512, 
             out_channels=512,
             device=device, 
             two_steps=two_steps, 
-            norm_type=norm_type
+            norm_type=norm_type,
+            initial_lr=initial_lr,
+            use_momentum=use_momentum
         )
-        self.bn2 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
+        #self.bn2 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
         self.fc3 = SoftHebbLinear(
             in_channels=512, 
             out_channels=128,
             device=device, 
             two_steps=two_steps, 
-            norm_type=norm_type
+            norm_type=norm_type,
+            initial_lr=initial_lr,
+            use_momentum=use_momentum
         )
-        self.bn3 = nn.BatchNorm1d(128, affine=False).requires_grad_(False)
+        #self.bn3 = nn.BatchNorm1d(128, affine=False).requires_grad_(False)
 
         self.fc4 = SoftHebbLinear(
             in_channels=128, 
@@ -216,7 +224,9 @@ class LinearSofHebb(nn.Module):
             device=device, 
             two_steps=two_steps, 
             norm_type=norm_type,
-            last_layer=True
+            last_layer=True,
+            initial_lr=initial_lr,
+            use_momentum=use_momentum
         )
 
         self.dropout = nn.Dropout(dropout)

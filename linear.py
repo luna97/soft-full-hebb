@@ -15,7 +15,9 @@ class SoftHebbLinear(nn.Module):
             device = 'cpu',
             norm_type=CLIP,
             two_steps=False,
-            last_layer=False
+            last_layer=False,
+            initial_lr=0.001,
+            use_momentum=False,
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -39,6 +41,9 @@ class SoftHebbLinear(nn.Module):
         self.two_steps = two_steps
         self.credit = torch.ones(in_channels).requires_grad_(False).to(device)
         self.last_layer = last_layer
+        self.lr = initial_lr
+        self.device = device
+        self.use_momentum = use_momentum
 
     def forward(self, x, target = None, credit = None):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
@@ -58,7 +63,7 @@ class SoftHebbLinear(nn.Module):
     def step(self, target=None, credit=None):
         if self.training:
             self.weight = self.weight.detach()
-            eta = self.Ci * self.Cj * 0.001
+            eta = self.Ci * self.Cj * self.lr
 
             #if target is not None and target.shape[-1] != 10:
                 
@@ -72,13 +77,15 @@ class SoftHebbLinear(nn.Module):
                 # dw = self.credit_update_rule(credit)
                 # self.update_credit(credit)
                 # dw = self.update_rule()
-            
-            if self.momentum is not None:
-                self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
+            if self.use_momentum:
+                if self.momentum is not None:
+                    self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
+                else:
+                    self.momentum = dw.detach()
+                self.weight = self.weight + self.momentum.detach() * eta
             else:
-                self.momentum = dw.detach()
+                self.weight = self.weight + dw.detach() * eta
             
-            self.weight = self.weight + self.momentum.detach() * eta
             #self.weight = self.weight + dw.detach() * eta
             self.weight = normalize_weights(self.weight, self.norm_type, dim=0)
 
@@ -86,7 +93,7 @@ class SoftHebbLinear(nn.Module):
             self.out = None
 
     def target_update_rule(self, target):
-        out = (self.out).softmax(dim=1)
+        out = self.out.softmax(dim=1)
         return (target - out).T @ self.x # / self.out.shape[0]
 
     def update_rule(self, target):
@@ -113,19 +120,10 @@ class SoftHebbLinear(nn.Module):
 
         grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
         grad_similarity = grad_similarity / (out_norm_matrix + 1e-8)
-        grad_out = grad_similarity @ self.out #* tanh_derivative
+        grad_out = grad_similarity @ self.out
         grad_weight = grad_out.T @ self.x
         #print(grad_weight)
-        return - grad_weight / batch_size #- self.weight * self.weight.norm() * 0.0001
-
-        grad_dw = - grad_weight / batch_size
-        soft = F.softmax(self.out, dim=1)
-        max_idx = torch.argmax(soft, dim=1)
-        soft[torch.arange(soft.shape[0]), max_idx] *= -1
-        soft_dw = -soft.T @ (self.x) / batch_size
-        # cos_dw = self.out.T @ self.x / batch_size
-        return grad_dw # + soft_dw
-    
+        return - grad_weight / batch_size
     
     def credit_update_rule(self, credit):
         balance = balanced_credit_fn(self.out) # [batch, out_channels]
@@ -151,8 +149,3 @@ class SoftHebbLinear(nn.Module):
             self.credit = J.mean(dim=0)
             self.credit = normalize_weights(self.credit, L1NORM, dim=0)
             
-
-def morlet(x, w=6.2):
-    b = torch.exp(-0.5 * x ** 2)
-    a = (torch.pi ** (-1/4)) * (1 + torch.e**(-w**2) - 2 * torch.e ** ((-3/4) * w**2)) ** 0.5
-    return a * torch.e**(-0.5 * w ** 2) * (torch.sin(w * x) - b)
