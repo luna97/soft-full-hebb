@@ -23,18 +23,22 @@ import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from utils import CustomStepLR
 from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY
+from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE
 
 torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
+# optimizers
 SGD = 'sgd'
 ADAMW = 'adamw'
 MOMENTUM = 'momentum'
 
+
 available_datasets = [CIFAR10, MNIST, IMAGENET]
 available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
 available_optimizers = [SGD, ADAMW, MOMENTUM]
+available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE]
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 
@@ -60,6 +64,8 @@ parser.add_argument('--device', type=str, default=device, help='device to use')
 parser.add_argument('--optimizer', type=str, default=ADAMW, help='optimizer to use')
 parser.add_argument('--initial_lr', type=float, default=0.001, help='initial learning rate')
 parser.add_argument('--no_momentum', action='store_true', help='use momentum')
+parser.add_argument('--conv_rule', type=str, default=CHANNEL, help='convolution rule')
+parser.add_argument('--regularize_orth', action='store_true', help='regularize orthogonal weights')
 args = parser.parse_args()
 
 device = args.device
@@ -77,6 +83,9 @@ normalization = args.normalization.lower()
 
 if args.optimizer.lower() not in available_optimizers:
     raise ValueError(f"Optimizer {args.optimizer} not available. Choose one of {available_optimizers}")
+
+if args.conv_rule.lower() not in available_conv_rules:
+    raise ValueError(f"Convolution rule {args.conv_rule} not available. Choose one of {available_conv_rules}")
 
 # Main training loop CIFAR10
 if __name__ == "__main__":
@@ -110,7 +119,11 @@ if __name__ == "__main__":
             learn_t_invert=args.learn_t,
             norm_type=normalization,
             two_steps=args.two_step,
-            linear_head=args.linear_head
+            linear_head=args.linear_head,
+            initial_lr=args.initial_lr,
+            use_momentum=not args.no_momentum,
+            conv_rule=args.conv_rule,
+            regularize_orth=args.regularize_orth
         ).to(device)
 
     model.train()
@@ -120,7 +133,7 @@ if __name__ == "__main__":
     if args.optimizer.lower() == ADAMW:
         optimizer = AdamW(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay)
     elif args.optimizer.lower() == MOMENTUM:
-        optimizer = optim.SGD(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay, momentum=0.9, nesterov=True)
+        optimizer = optim.SGD(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
     else:
         optimizer = optim.SGD(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay)
     # print(f'optimizing {[name for name, param in params_to_optimize if param.requires_grad]}')

@@ -7,7 +7,8 @@ import torchvision
 from utils import normalize_weights, CLIP
 from conv import SoftHebbConv2d
 from linear import SoftHebbLinear
-  
+from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE
+
 CONV = 'conv'
 LINEAR = 'linear'
 
@@ -23,14 +24,18 @@ class DeepSoftHebb(nn.Module):
             learn_t_invert=False, 
             norm_type=CLIP,
             two_steps=False,
-            linear_head=False
+            linear_head=False,
+            initial_lr=0.001,
+            use_momentum=False,
+            conv_rule=SAMPLE,
+            regularize_orth=False
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
         lol = 96
         out_channels_1 = lol
-        out_channels_2 = out_channels_1 * 2
-        out_channels_3 = out_channels_2 * 2
+        out_channels_2 = out_channels_1 * 4
+        out_channels_3 = out_channels_2 * 4
         k_size_1, k_size_2, k_size_3 = 5, 3, 3
         stride_1, stride_2, stride_3 = 1, 1, 1
         padding_1, padding_2, padding_3 = 2, 1, 1
@@ -46,13 +51,16 @@ class DeepSoftHebb(nn.Module):
             stride=stride_1,
             padding=padding_1,
             device=device, 
-            initial_lr=0.08, # only for original version
+            initial_lr=initial_lr,
             first_layer=True,
             neuron_centric=neuron_centric and not unsupervised_first,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
-            inp_size=input_size
+            inp_size=input_size,
+            use_momentum=use_momentum,
+            conv_rule=conv_rule,
+            regularize_orth=regularize_orth
         )
         self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
         out_size = ((input_size - k_size_1 + 2 * padding_1) // stride_1) + 1
@@ -68,12 +76,15 @@ class DeepSoftHebb(nn.Module):
             stride=stride_2,
             device=device, 
             padding=padding_2,
-            initial_lr=0.005, # only for original version
+            initial_lr=initial_lr,
             neuron_centric=neuron_centric and not unsupervised_first,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
-            inp_size=out_size
+            inp_size=out_size,
+            use_momentum=use_momentum,
+            conv_rule=conv_rule,
+            regularize_orth=regularize_orth
         )
         self.pool2 = nn.MaxPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
         out_size = (out_size - k_size_2 + 2 * padding_2) // stride_2 + 1
@@ -89,12 +100,15 @@ class DeepSoftHebb(nn.Module):
             stride=stride_3,
             padding=padding_3,
             device=device,
-            initial_lr=0.01, # only for original version
+            initial_lr=initial_lr,
             neuron_centric=neuron_centric and not unsupervised_first,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
-            inp_size=out_size
+            inp_size=out_size,
+            use_momentum=use_momentum,
+            conv_rule=conv_rule,
+            regularize_orth=regularize_orth
         )
         # self.activ3 = nn.Tanh() #Triangle(power=1.) #
         self.pool3 = nn.AvgPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
@@ -117,7 +131,10 @@ class DeepSoftHebb(nn.Module):
                 out_channels=10,
                 device=device, 
                 two_steps=two_steps, 
-                norm_type=norm_type
+                norm_type=norm_type,
+                last_layer=True,
+                initial_lr=initial_lr,
+                use_momentum=use_momentum
             )
         else:
             self.classifier = nn.Linear(out_dim, 10)
@@ -147,7 +164,7 @@ class DeepSoftHebb(nn.Module):
         # block 4
         out = self.flatten(out)
         if self.neuron_centric and not self.linear_head:
-            # out = self.bn_out(out)
+            #out = self.bn_out(out)
             #out = self.fc1(self.dropout(out), target=target)
             #out = self.act(out)
             out = self.fc2(self.dropout(out), target=target)
@@ -235,13 +252,13 @@ class LinearSofHebb(nn.Module):
     def forward(self, out, target=None):
         # flatten
         out = out.view(out.size(0), -1)
-        out = self.fc1(out, target=target)
+        out = self.fc1(self.dropout(out), target=target)
         out = self.act(out)
         # out = self.bn1(out)
-        out = self.fc2(out, target=target)
+        out = self.fc2(self.dropout(out), target=target)
         out = self.act(out)
         # out = self.bn2(out)
-        out = self.fc3(out, target=target)
+        out = self.fc3(self.dropout(out), target=target)
         out = self.act(out)
         # out = self.bn3(out)
         out = self.fc4(self.dropout(out), target=target)

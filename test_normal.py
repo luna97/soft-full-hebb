@@ -68,7 +68,7 @@ class NetConv(nn.Module):
 class NetLinear(nn.Module):
     def __init__(self):
         super(NetLinear, self).__init__()
-        self.fc1 = nn.Linear(784, 512)
+        self.fc1 = nn.Linear(3072, 512)
         self.fc2 = nn.Linear(512, 512)
         self.fc3 = nn.Linear(512, 128)
         self.fc4 = nn.Linear(128, 10)
@@ -89,12 +89,12 @@ transform = transforms.Compose([
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 ])
 
-batch_size = 32
+batch_size = 64
 log=True
-dataset='mnist'
+dataset='cifar10'
 net_type='linear'
-lr = 0.001
-no_momentum = False
+lr = 0.01
+no_momentum = True
 device = 'cpu' # torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 epochs=50
 dataset_base, train_dataset, val_dataset, test_dataset = get_datasets(dataset)

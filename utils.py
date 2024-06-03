@@ -18,9 +18,9 @@ def normalize_weights(weights, norm_type, dim=0):
     if norm_type == CLIP:
         return weights.clip(-10, 10)
     elif norm_type == L2NORM:
-        return weights / torch.norm(weights, dim=dim, keepdim=True)
+        return F.normalize(weights, p=2, dim=dim)
     elif norm_type == L1NORM:
-        return weights / (torch.linalg.norm(weights, dim=dim, ord=1, keepdim=True) + 1e-30)
+        return F.normalize(weights, p=1, dim=dim)
     elif norm_type == MAXNORM:
         return weights / (torch.abs(weights).amax() + 1e-30)
     elif norm_type == NONORM:

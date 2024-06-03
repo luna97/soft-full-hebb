@@ -6,6 +6,12 @@ import torch.nn.grad
 from torch.nn.modules.utils import _pair
 from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM
 
+# conv rules
+SOFTHEBB = 'softhebb'
+ANTIHEBB = 'antihebb'
+CHANNEL = 'channel'
+SAMPLE = 'sample'
+
 class SoftHebbConv2d(nn.Module):
     def __init__(
             self,
@@ -24,7 +30,10 @@ class SoftHebbConv2d(nn.Module):
             learn_t_invert=False,
             norm_type=CLIP,
             two_steps=False,
-            inp_size=None
+            inp_size=None,
+            use_momentum=False,
+            conv_rule=SAMPLE,
+            regularize_orth=False
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -43,6 +52,7 @@ class SoftHebbConv2d(nn.Module):
         self.padding_mode = 'reflect'
         self.F_padding = (padding, padding, padding, padding)
         self.norm_type = norm_type
+        self.regularize_orth = regularize_orth
 
         if learn_t_invert:
             self.t_invert = nn.Parameter(torch.tensor(t_invert, dtype=torch.float), requires_grad=True)
@@ -53,6 +63,8 @@ class SoftHebbConv2d(nn.Module):
         self.first_layer = first_layer
         self.neuron_centric = neuron_centric
         self.two_steps = two_steps
+        self.use_momentum = use_momentum
+        self.conv_rule = conv_rule
 
         weight_range = 25 / math.sqrt((in_channels / groups) * kernel_size * kernel_size)
         weight = weight_range * torch.randn((out_channels, in_channels // groups, *self.kernel_size)).requires_grad_(False).to(device)
@@ -71,13 +83,18 @@ class SoftHebbConv2d(nn.Module):
             self.Ck2 = nn.Parameter(torch.ones(kernel_size), requires_grad=True)
 
     def forward(self, x, target = None):
-        x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
-        x = F.pad(x, self.F_padding, self.padding_mode)  # pad input
+        # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
+        if self.conv_rule == SOFTHEBB or self.conv_rule == ANTIHEBB:
+            x = F.pad(x, self.F_padding, self.padding_mode)  # pad input
+            self.x = x.clone().detach()
+        else:
+            self.x = x.clone().detach()
+            x = F.pad(x, self.F_padding, self.padding_mode)  # pad input 
         tortn = F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
 
         # keeping only the sum of the batches for memory efficiency
         self.out = tortn.clone().detach()# .sum(dim=0).unsqueeze(0)
-        self.x = x.clone().detach()#.sum(dim=0).unsqueeze(0)
+        # self.x = x.clone().detach()#.sum(dim=0).unsqueeze(0)
         if self.two_steps:
             self.step(target=target)
             return F.conv2d(x, self.weight, None, self.stride, 0, self.dilation, self.groups)
@@ -91,32 +108,43 @@ class SoftHebbConv2d(nn.Module):
                 dw = self.credit_update_rule(credit)
                 self.update_credit(credit)
             elif target is not None:
-                # dw = self.regularize_orthogonality() * 0.01
-                # dw = self.update_rule_channel(target=target)
-                dw = self.update_rule_sample(target=target)
-                #dw = (dw1 + dw2) / 2
+                if self.conv_rule == SOFTHEBB:
+                    dw = self.soft_hebb_rule()
+                elif self.conv_rule == ANTIHEBB:
+                    dw = self.soft_hebb_rule(antihebb=True)
+                elif self.conv_rule == CHANNEL:
+                    dw = self.update_rule_channel(target)
+                elif self.conv_rule == SAMPLE:
+                    dw = self.update_rule_sample(target)
+                else:
+                    raise ValueError(f"Invalid conv rule: {self.conv_rule}")
   
             if self.neuron_centric:
-                # eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
-                # eta = (eta ** 0.5)[:, None, None, None]
-                eta = self.Cj[:, None, None, None] * self.Ci[None, :, None, None] * self.Ck1[None, None, :, None] * self.Ck2[None, None, None, :]
-                # eta = eta * cicj
+                eta = self.Cj[:, None, None, None] * self.Ci[None, :, None, None] * self.Ck1[None, None, :, None] * self.Ck2[None, None, None, :] * self.initial_lr
             else:
                 eta = torch.abs(torch.linalg.norm(self.weight.view(self.weight.shape[0], -1), dim=1, ord=2) - 1) + 1e-10
                 eta = (eta ** 0.5)[:, None, None, None] * self.initial_lr  
 
+            if self.use_momentum:
+                if self.momentum is not None:
+                    self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
+                else:
+                    self.momentum = dw.detach()
+                if self.regularize_orth:
+                    self.weight = self.weight + (self.momentum.detach() + self.regularize_orthogonality()) * eta
+                else:
+                    self.weight = self.weight + self.momentum.detach() * eta
+            else:
+                if self.regularize_orth:
+                    self.weight = self.weight + (dw.detach() + self.regularize_orthogonality()) * eta 
+                else:
+                    self.weight = self.weight + dw.detach() * eta
 
-            # if self.momentum is None:
-            #    self.momentum = dw
-            #else:
-            #    self.momentum = 0.9 * self.momentum + 0.1 * dw 
-
-            # print(self.momentum.norm())
-            # reg = self.regularize_orthogonality()
-            # self.weight = self.weight + (self.momentum.detach())* eta * 0.001 
-            self.weight = self.weight + dw.detach() * eta * 0.0001
             # print(eta.norm())
-            self.weight = normalize_weights(self.weight, self.norm_type, dim=[2, 3])
+            to_norm = self.weight.view(self.weight.shape[0], -1)
+            self.weight = normalize_weights(to_norm, self.norm_type, dim=0).view(self.weight.shape)
+            # self.weight = normalize_weights(self.weight, self.norm_type, dim=[2, 3])
+            # print('weight norm: ', torch.linalg.norm(self.weight.view, dim=[2,3], ord=2))
             self.x = None
             self.out = None
 
@@ -128,36 +156,26 @@ class SoftHebbConv2d(nn.Module):
         flat_softwta_activs = torch.softmax(self.t_invert * flat_weighted_inputs, dim=0)
 
         if antihebb:
-            flat_softwta_activs = - flat_softwta_activs  # Turn all postsynaptic activations into anti-Hebbian
+            flat_softwta_activs = -flat_softwta_activs  # Turn all postsynaptic activations into anti-Hebbian
             win_neurons = torch.argmax(flat_weighted_inputs, dim=0)  # winning neuron for each pixel in each input
             competing_idx = torch.arange(flat_weighted_inputs.size(1))  # indeces of all pixel-input elements
             # Turn winner neurons' activations back to hebbian
             flat_softwta_activs[win_neurons, competing_idx] = - flat_softwta_activs[win_neurons, competing_idx]
 
         softwta_activs = flat_softwta_activs.view(out_channels, batch_size, height_out, width_out).transpose(0, 1)
-        yx = torch.nn.grad.conv2d_weight(
-            self.x, #.transpose(0, 1),  # (B, IC, IH, IW) -> (IC, B, IH, IW)
-            self.weight.shape,
-            softwta_activs, #.transpose(0, 1),  # (B, OC, OH, OW) -> (OC, B, OH, OW)
+        yx = F.conv2d(
+            self.x.transpose(0, 1),  # (B, IC, IH, IW) -> (IC, B, IH, IW)
+            softwta_activs.transpose(0, 1),  # (B, OC, OH, OW) -> (OC, B, OH, OW)
             padding=0,
-            stride=self.stride,
-            dilation=self.dilation,
+            stride=self.dilation,
+            dilation=self.stride,
             groups=1
-        )
-        #.transpose(0, 1)  # (IC, OC, KH, KW) -> (OC, IC, KH, KW)
-        # yx = F.conv2d(
-        #    self.x.transpose(0, 1),  # (B, IC, IH, IW) -> (IC, B, IH, IW)
-        #    softwta_activs.transpose(0, 1),  # (B, OC, OH, OW) -> (OC, B, OH, OW)
-        #    padding=0,
-        #    stride=self.dilation,
-        #    dilation=self.stride,
-        #    groups=1
-        #).transpose(0, 1)  # (IC, OC, KH, KW) -> (OC, IC, KH, KW)
+        ).transpose(0, 1)  # (IC, OC, KH, KW) -> (OC, IC, KH, KW)
 
         # sum over batch, output pixels: each kernel element will influence all batches and output pixels.
         yu = torch.sum(torch.mul(softwta_activs, self.out), dim=(0, 2, 3))
         delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight.detach()
-        # delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
+        # delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
         return delta_weight
     
     def credit_update_rule(self, credit):
@@ -209,22 +227,25 @@ class SoftHebbConv2d(nn.Module):
     def update_rule_channel(self, target):
         # Reshape the output to [batch_size, output_channels * height * width]
         batch_size, out_channels, height, width = self.out.shape
-        out = self.out.view(batch_size, out_channels, -1) # [batch, output_channels, height * width]
+        out = self.out.transpose(0, 1).reshape(out_channels, -1)
+
+        # out = self.out.view(batch_size, out_channels, -1) # [batch, output_channels, height * width]
+        out = F.tanh(out)
 
         # Cosine similarity matrix
-        similarity = torch.bmm(out, out.transpose(2, 1))  # [batch, output_channels, output_channels]
-        out_norm = torch.linalg.norm(out, dim=2, ord=2).to(self.out.device)  # [batch, output_channels]
-        similarity = similarity / (out_norm[:, :, None] * out_norm[:, None, :]) # [batch, output_channels, output_channels]
+        similarity = out @ out.T  # [output_channels, output_channels]
+        out_norm = torch.linalg.norm(out, dim=1, ord=2).to(self.out.device)  # [batch_size]
+        similarity = similarity / (out_norm[:, None] * out_norm[None, :]) # [output_channels, output_channels]
 
-        similarity = similarity - torch.diag_embed(torch.diagonal(similarity, dim1=-2, dim2=-1)) # [batch, output_channels, output_channels]
+        similarity = similarity - torch.diag_embed(torch.diagonal(similarity, dim1=-2, dim2=-1)) # [output_channels, output_channels]
 
         # Manually calculate the gradient
         grad_similarity = 2 * similarity.abs()  # [batch, batch]
 
         # Compute the gradient of the loss w.r.t. out
-        out_norm_matrix = (out_norm[:, :, None] * out_norm[:, None, :]) # [batch, output_channels, output_channels]
+        out_norm_matrix = (out_norm[:, None] * out_norm[None, :]) # [output_channels, output_channels]
 
-        grad_similarity_normalized = grad_similarity / out_norm_matrix # [batch, output_channels, output_channels]
+        grad_similarity_normalized = grad_similarity / out_norm_matrix # [output_channels, output_channels]
         grad_out = grad_similarity_normalized @ out
 
 
@@ -237,6 +258,9 @@ class SoftHebbConv2d(nn.Module):
             self.x, self.weight.shape, grad_out, self.stride, self.F_padding[0], self.dilation, self.groups
         ) / batch_size
 
+        # print('grad norm: ', conv_weight_grad.norm())
+        # print('weight norm: ', self.weight.norm())
+
         return - conv_weight_grad 
     
 
@@ -244,6 +268,7 @@ class SoftHebbConv2d(nn.Module):
         # Reshape the output to [batch_size, output_channels * height * width]
         batch_size, out_channels, height, width = self.out.shape
         out = self.out.view(batch_size, -1) # [batch_size, height * width * output_channels]
+        out = F.tanh(out)
 
         # Cosine similarity matrix
         similarity = out @ out.T # [batch, output_channels, output_channels]
@@ -293,6 +318,6 @@ class SoftHebbConv2d(nn.Module):
 
         dw_ortho = 2 * similarity.abs() @ weight
         dw_ortho = dw_ortho.view(self.weight.shape)
-        return - dw_ortho
+        return - dw_ortho.detach() 
 
         
