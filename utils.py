@@ -68,7 +68,6 @@ def evaluate(model, loader, loss_fn, device):
     acc = correct / total_test
     f1 = f1_score(torch.cat(test_targets), torch.cat(test_res), average='macro')
 
-    # print(f"Accuracy: {acc_test:.4f}, F1: {f1_test:.4f}")
     return acc, f1, test_loss / total_test
     
 

@@ -97,33 +97,47 @@ class SoftHebbLinear(nn.Module):
         return (target - out).T @ self.x # / self.out.shape[0] 
 
     def update_rule(self, target):
-        self.out = F.tanh(self.out)
-        # self.out = 1 - torch.tanh(self.out) ** 2
+        out = F.tanh(self.out)
+        # out = F.relu(self.out)
 
-        similarity = (self.out) @ (self.out).T # [batch, batch]
-        out_norm = torch.linalg.norm(self.out, dim=1, ord=2) # [batch]
-        similarity = similarity / (out_norm[:, None] * out_norm[None, :]) # [batch, batch]
+        norms = torch.norm(out, dim=1, keepdim=True, p=2) + 1e-8
+        out_norm = out / norms
 
-        diag = torch.diag(torch.diag(similarity)) # [batch, batch]
-        similarity = similarity - diag # [batch, batch]
-        batch_size = similarity.shape[0]
+        # Cosine similarity matrix
+        similarity = out_norm @ out_norm.T # [batch, output_channels, output_channels]
 
         # Create masks based on class labels
         positive_mask = (target.unsqueeze(1) == target.unsqueeze(0)).float()
         negative_mask = 1.0 - positive_mask
-        eye_mask = torch.eye(batch_size).to(positive_mask.device)
-        # mask = torch.ones_like(positive_mask) - eye_mask
+        # set the diagonal to 0, negative_mask is already 0 there
+        positive_mask.fill_diagonal_(0)
 
-        # Ensure no self-similarity is considered
-        positive_mask -= eye_mask
-        out_norm_matrix = out_norm[:, None] * out_norm[None, :]
+        # The loss aims to minimize the similarity between samples of the same class
+        # and maximize the similarity between samples of different classes
+        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).sum()
 
-        grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
-        grad_similarity = grad_similarity / (out_norm_matrix + 1e-8)
-        grad_out = grad_similarity @ self.out
-        grad_weight = grad_out.T @ self.x
-        #print(grad_weight)
-        return - grad_weight / batch_size
+        # Add label smoothing to positive and negative masks
+        # positive_mask = (1 - 0.1) * positive_mask + 0.1 / (self.out.shape[0] - 1)
+        # negative_mask = (1 - 0.1) * negative_mask + 0.1 / (self.out.shape[0] - 1)
+        # positive_mask.fill_diagonal_(0)
+        # negative_mask.fill_diagonal_(0)
+
+        # Compute the gradient of the loss w.r.t. similarity
+        grad_similarity = negative_mask * similarity.abs() - positive_mask * similarity
+
+        # Compute gradient of similarity w.r.t. normalized output (out_norm)
+        grad_out_norm = grad_similarity @ out_norm
+
+        # Backpropagate through normalization
+        grad_out = grad_out_norm / (norms + 1e-8) - (out_norm * (grad_out_norm * out).sum(dim=1, keepdim=True) / ((norms + 1e-8)**2))
+    
+        # Backpropagate through tanh
+        # grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
+        # grad_out *= (out > 0).float().view_as(grad_out)
+
+        # Compute the gradient of the loss w.r.t. the input
+        grad_weight = grad_out.T @ self.x / self.out.shape[0]
+        return - grad_weight
     
     def credit_update_rule(self, credit):
         balance = balanced_credit_fn(self.out) # [batch, out_channels]

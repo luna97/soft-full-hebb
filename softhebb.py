@@ -25,7 +25,7 @@ from utils import CustomStepLR
 from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE
 
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 

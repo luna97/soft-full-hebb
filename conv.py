@@ -248,7 +248,6 @@ class SoftHebbConv2d(nn.Module):
         grad_similarity_normalized = grad_similarity / out_norm_matrix # [output_channels, output_channels]
         grad_out = grad_similarity_normalized @ out
 
-
         # Reshape grad_out back to the shape of the convolutional layer's output
         grad_out = grad_out.view(batch_size, out_channels, height, width)
 
@@ -268,39 +267,45 @@ class SoftHebbConv2d(nn.Module):
         # Reshape the output to [batch_size, output_channels * height * width]
         batch_size, out_channels, height, width = self.out.shape
         out = self.out.view(batch_size, -1) # [batch_size, height * width * output_channels]
-        out = F.tanh(out)
+        out = torch.tanh(out) # apply tanh -> still to understand why with this it works better
+       
+        norms = torch.norm(out, dim=1, keepdim=True, p=2) + 1e-8
+        out_norm = out / norms
 
         # Cosine similarity matrix
-        similarity = out @ out.T # [batch, output_channels, output_channels]
-        out_norm = torch.linalg.norm(out, dim=1, ord=2).to(self.out.device)  # [batch_size]
-        similarity = similarity / (out_norm[ :, None] * out_norm[None, :]) # [batch_size, batch_size]
+        similarity = out_norm @ out_norm.T # [batch, output_channels, output_channels]
 
-        similarity = similarity - torch.diag_embed(torch.diagonal(similarity, dim1=0, dim2=1)) # [batch_size, batch_size]
-        eye_mask = torch.eye(out_channels)
-        mask = torch.ones((batch_size, out_channels, out_channels)) - eye_mask[None, ...]
-        mask = mask.to(self.out.device)
-
+        # Create masks based on class labels
         positive_mask = (target.unsqueeze(1) == target.unsqueeze(0)).float()
         negative_mask = 1.0 - positive_mask
-        eye_mask = torch.eye(batch_size).to(positive_mask.device)
-        positive_mask -= eye_mask
+        # set the diagonal to 0, negative_mask is already 0 there
+        positive_mask.fill_diagonal_(0)
 
+        # The loss aims to minimize the similarity between samples of the same class
+        # and maximize the similarity between samples of different classes
+        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).sum()
 
-        # Manually calculate the gradient
-        # grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
-        grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
+        # Add label smoothing to positive and negative masks
+        # positive_mask = (1 - 0.1) * positive_mask + 0.1 / (self.out.shape[0] - 1)
+        # negative_mask = (1 - 0.1) * negative_mask + 0.1 / (self.out.shape[0] - 1)
+        # positive_mask.fill_diagonal_(0)
+        # negative_mask.fill_diagonal_(0)
 
+        # Compute the gradient of the loss w.r.t. similarity
+        grad_similarity = negative_mask * similarity.abs() - positive_mask * similarity
 
-        # Compute the gradient of the loss w.r.t. out
-        out_norm_matrix = (out_norm[:, None] * out_norm[None, :]) # [batch_size, batch_size]
+        # Compute gradient of similarity w.r.t. normalized output (out_norm)
+        grad_out_norm = grad_similarity @ out_norm
 
-        grad_similarity_normalized = grad_similarity / out_norm_matrix # [batch_size, batch_size]
-        grad_out = grad_similarity_normalized @ out
+        # Backpropagate through normalization
+        grad_out = grad_out_norm / (norms + 1e-8) - (out_norm * (grad_out_norm * out).sum(dim=1, keepdim=True) / ((norms + 1e-8)**2))
+    
+        # Backpropagate through tanh
+        # grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
+        # grad_out *= (out > 0).float().view_as(grad_out)
 
-
-        # Reshape grad_out back to the shape of the convolutional layer's output
+        # reshape grad_out back to the shape of the convolutional layer's output
         grad_out = grad_out.view(batch_size, out_channels, height, width)
-
 
         # Compute the gradient with respect to the convolutional weights
         conv_weight_grad = torch.nn.grad.conv2d_weight(
