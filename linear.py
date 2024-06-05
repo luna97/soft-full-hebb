@@ -108,7 +108,7 @@ class SoftHebbLinear(nn.Module):
 
         # The loss aims to minimize the similarity between samples of the same class
         # and maximize the similarity between samples of different classes
-        loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).mean()
+        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).mean()
 
         # Add label smoothing to positive and negative masks
         if self.label_smoothing:

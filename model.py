@@ -155,7 +155,7 @@ class DeepSoftHebb(nn.Module):
                 two_steps=two_steps, 
                 norm_type=norm_type,
                 last_layer=True,
-                initial_lr=initial_lr,
+                initial_lr=initial_lr*10,
                 use_momentum=use_momentum
             )
         else:
