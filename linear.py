@@ -18,6 +18,7 @@ class SoftHebbLinear(nn.Module):
             last_layer=False,
             initial_lr=0.001,
             use_momentum=False,
+            label_smoothing=None,
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -44,39 +45,32 @@ class SoftHebbLinear(nn.Module):
         self.lr = initial_lr
         self.device = device
         self.use_momentum = use_momentum
+        self.label_smoothing = label_smoothing
 
-    def forward(self, x, target = None, credit = None):
+    def forward(self, x, target = None):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
         tortn = F.linear(x, self.weight)
         self.x = x.clone().detach()
         self.out = tortn.clone().detach()
 
-        # if credit is not None:
-        #    self.update_credit(credit)
-
         if self.two_steps:
-            self.step(target, credit)
+            self.step(target)
             return F.linear(x, self.weight)
 
         return tortn
     
-    def step(self, target=None, credit=None):
+    def step(self, target=None):
         if self.training:
             self.weight = self.weight.detach()
             eta = self.Ci * self.Cj * self.lr
 
             #if target is not None and target.shape[-1] != 10:
-                
 
             if target is not None and self.last_layer: 
                 target = torch.functional.F.one_hot(target, 10).float().to(self.x.device)
                 dw = self.target_update_rule(target)
-                # self.update_credit(target)
             else:
                 dw = self.update_rule(target=target)
-                # dw = self.credit_update_rule(credit)
-                # self.update_credit(credit)
-                # dw = self.update_rule()
             if self.use_momentum:
                 if self.momentum is not None:
                     self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
@@ -87,7 +81,7 @@ class SoftHebbLinear(nn.Module):
                 self.weight = self.weight + dw.detach() * eta
             
             #self.weight = self.weight + dw.detach() * eta
-            self.weight = normalize_weights(self.weight, self.norm_type, dim=0)
+            self.weight = normalize_weights(self.weight, L2NORM, dim=0)
 
             self.x = None
             self.out = None
@@ -114,52 +108,31 @@ class SoftHebbLinear(nn.Module):
 
         # The loss aims to minimize the similarity between samples of the same class
         # and maximize the similarity between samples of different classes
-        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).sum()
+        loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).mean()
 
         # Add label smoothing to positive and negative masks
-        # positive_mask = (1 - 0.1) * positive_mask + 0.1 / (self.out.shape[0] - 1)
-        # negative_mask = (1 - 0.1) * negative_mask + 0.1 / (self.out.shape[0] - 1)
-        # positive_mask.fill_diagonal_(0)
-        # negative_mask.fill_diagonal_(0)
+        if self.label_smoothing:
+            positive_mask = (1 - self.label_smoothing) * positive_mask + self.label_smoothing / (self.out.shape[0] - 1)
+            negative_mask = (1 - self.label_smoothing) * negative_mask + self.label_smoothing / (self.out.shape[0] - 1)
+            positive_mask.fill_diagonal_(0)
+            negative_mask.fill_diagonal_(0)
+
 
         # Compute the gradient of the loss w.r.t. similarity
-        grad_similarity = negative_mask * similarity.abs() - positive_mask * similarity
+        grad_similarity = negative_mask * similarity.sign() - positive_mask
+        grad_similarity /= similarity.numel()
 
         # Compute gradient of similarity w.r.t. normalized output (out_norm)
-        grad_out_norm = grad_similarity @ out_norm
+        grad_out = grad_similarity @ out_norm
 
         # Backpropagate through normalization
-        grad_out = grad_out_norm / (norms + 1e-8) - (out_norm * (grad_out_norm * out).sum(dim=1, keepdim=True) / ((norms + 1e-8)**2))
+        grad_out = (grad_out * norms - out_norm * torch.sum(out * grad_out, dim=1, keepdim=True)) / norms**2
+        # grad_out = grad_out_norm / norms ** 2
     
         # Backpropagate through tanh
-        # grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
+        grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
         # grad_out *= (out > 0).float().view_as(grad_out)
 
         # Compute the gradient of the loss w.r.t. the input
-        grad_weight = grad_out.T @ self.x / self.out.shape[0]
+        grad_weight = grad_out.T @ self.x
         return - grad_weight
-    
-    def credit_update_rule(self, credit):
-        balance = balanced_credit_fn(self.out) # [batch, out_channels]
-        c_bal = credit[None, :] * balance # [batch, out_channels]
-
-        # this is equal to the backward pass of a linear layer for the weights
-        #return - c_bal.T @ self.x / self.out.shape[0]
-        return torch.zeros_like(self.weight)
-
-    
-
-    def update_credit(self, credit):
-        with torch.no_grad():
-            if self.weight.shape[0] == 10:
-                c_bal = credit - self.out # F.softmax(self.out, dim=1)
-            else:
-                balance = balanced_credit_fn(self.out) # [batch, out_channels]
-                c_bal = credit[None, :] * balance # [batch, out_channels]
-
-            # this is equal to the backward pass of a linear layer for the inputs
-            J = c_bal @ self.weight # [batch, in_channels]
-            
-            self.credit = J.mean(dim=0)
-            self.credit = normalize_weights(self.credit, L1NORM, dim=0)
-            

@@ -2,7 +2,7 @@ import torch
 from torchvision import datasets, transforms
 from torch.utils.data import Subset, DataLoader
 import wandb
-from model import DeepSoftHebb, CLIP
+from model import DeepSoftHebb, CLIP, LinearSofHebb
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from tqdm import tqdm
 from sklearn.metrics import f1_score
@@ -16,7 +16,7 @@ torch.autograd.set_detect_anomaly(True)
 
 # Load the MNIST dataset
 
-dataset = CIFAR10
+dataset = MNIST
 dataset_base, train_dataset, val_dataset, test_dataset = get_datasets(dataset)
 
 tasks = [
@@ -68,20 +68,34 @@ test_loaders = [DataLoader(dataset, batch_size=batch_size, shuffle=False)
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
 input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
-lr = 1.
-wd = 0.0001
-model = DeepSoftHebb(
-    device=device,
-    in_channels=in_channels,
-    dropout=0.1, 
-    input_size=input_size,
-    neuron_centric=True,
-    unsupervised_first=False,
-    learn_t_invert=False,
-    norm_type=CLIP,
-    two_steps=False,
-    linear_head=False
-).to(device)
+lr = 0.1
+wd = 0.001
+linear = True
+
+if linear:
+    model = LinearSofHebb(
+        in_channels=in_channels,
+        norm_type='l2norm',
+        two_steps=False,
+        device=device,
+        dropout=0.,
+        input_size=input_size,
+        initial_lr=0.001,
+        use_momentum=True
+    ).to(device)
+else:
+    model = DeepSoftHebb(
+        device=device,
+        in_channels=in_channels,
+        dropout=0.1, 
+        input_size=input_size,
+        neuron_centric=True,
+        unsupervised_first=False,
+        learn_t_invert=False,
+        norm_type=CLIP,
+        two_steps=False,
+        linear_head=False
+    ).to(device)
 
 loss_fn = torch.nn.CrossEntropyLoss()
 

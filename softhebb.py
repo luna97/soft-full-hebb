@@ -23,7 +23,7 @@ import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from utils import CustomStepLR
 from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY
-from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE
+from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE
 
 # torch.autograd.set_detect_anomaly(True)
 torch.manual_seed(42)
@@ -38,7 +38,7 @@ MOMENTUM = 'momentum'
 available_datasets = [CIFAR10, MNIST, IMAGENET]
 available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
 available_optimizers = [SGD, ADAMW, MOMENTUM]
-available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE]
+available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE]
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 
@@ -64,8 +64,12 @@ parser.add_argument('--device', type=str, default=device, help='device to use')
 parser.add_argument('--optimizer', type=str, default=ADAMW, help='optimizer to use')
 parser.add_argument('--initial_lr', type=float, default=0.001, help='initial learning rate')
 parser.add_argument('--no_momentum', action='store_true', help='use momentum')
-parser.add_argument('--conv_rule', type=str, default=CHANNEL, help='convolution rule')
+parser.add_argument('--conv_rule', type=str, default=SAMPLE, help='convolution rule')
 parser.add_argument('--regularize_orth', action='store_true', help='regularize orthogonal weights')
+parser.add_argument('--conv_channels', type=int, default=96, help='number of input channels for convnet')
+parser.add_argument('--conv_factor', type=int, default=4, help='factor size for convnet')
+parser.add_argument('--use_batch_norm', action='store_true', help='use batch normalization')
+parser.add_argument('--label_smoothing', type=float, default=None, help='label smoothing factor')
 args = parser.parse_args()
 
 device = args.device
@@ -106,7 +110,9 @@ if __name__ == "__main__":
             dropout=args.dropout,
             input_size=input_size,
             initial_lr=args.initial_lr,
-            use_momentum=not args.no_momentum
+            use_momentum=not args.no_momentum,
+            use_batch_norm=args.use_batch_norm,
+            label_smoothing=args.label_smoothing
         ).to(device)
     else:
         model = DeepSoftHebb(
@@ -123,7 +129,11 @@ if __name__ == "__main__":
             initial_lr=args.initial_lr,
             use_momentum=not args.no_momentum,
             conv_rule=args.conv_rule,
-            regularize_orth=args.regularize_orth
+            regularize_orth=args.regularize_orth,
+            conv_channels=args.conv_channels,
+            conv_factor=args.conv_factor,
+            use_batch_norm=args.use_batch_norm,
+            label_smoothing=args.label_smoothing
         ).to(device)
 
     model.train()
