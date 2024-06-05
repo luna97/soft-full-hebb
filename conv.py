@@ -179,54 +179,7 @@ class SoftHebbConv2d(nn.Module):
         # sum over batch, output pixels: each kernel element will influence all batches and output pixels.
         yu = torch.sum(torch.mul(softwta_activs, self.out), dim=(0, 2, 3))
         delta_weight = yx - yu.view(-1, 1, 1, 1) * self.weight.detach()
-        # delta_weight = delta_weight / (torch.abs(delta_weight).amax() + 1e-30)  # Scale [min/max , 1]
         return delta_weight
-    
-    def credit_update_rule(self, credit):
-        return torch.zeros_like(self.weight)
-        batch_size, out_channels, height_out, width_out = self.out.shape
-        batch_size, in_channels, height_in, width_in = self.x.shape
-        # credit is flattened and corresponds to [out_channels * out_img_size ** 2]
-        # credit = credit.view(self.out_channels, height_out, width_out)# .flip((1, 2))
-
-        balance = balanced_credit_fn(self.out.view(batch_size, -1)) # [batch, out_channels]
-        c_bal = credit[None, :] * balance # [batch, out_channels, height_out, width_out]
-
-        c_bal = c_bal.view(batch_size, out_channels, height_out, width_out)
-
-        return - torch.nn.grad.conv2d_weight(
-            self.x,
-            self.weight.shape,
-            c_bal,
-            stride=self.stride,
-            padding=self.F_padding[0],
-            dilation=self.dilation,
-            groups=1
-        ) / batch_size
-
-    def update_credit(self, credit):
-        with torch.no_grad():
-            balance = balanced_credit_fn(self.out) # [batch, out_channels * height_out * width_out]
-
-            batch_size, out_channels, height_out, width_out = self.out.shape
-            in_channels, height_in, width_in = self.x.shape[1:]
-            credit = credit.view(1, out_channels, height_out, width_out)
-            # credit is at output level
-            c_bal = credit * balance # [batch, out_channels, height_out, width_out]
-
-            # this is equal to the backward pass of a linear layer for the inputs
-            J = torch.nn.grad.conv2d_input(
-                self.x.shape,
-                self.weight, #.flip((2, 3)),
-                c_bal,
-                self.stride, 
-                self.F_padding[0],
-                self.dilation,
-                self.groups
-            )
-
-            self.credit = J.view(batch_size, -1).mean(dim=0) 
-            # self.credit = normalize_weights(self.credit, L1NORM, dim=0)
 
     def update_rule_channel(self, target):
         # Reshape the output to [batch_size, output_channels * height * width]
@@ -317,8 +270,9 @@ class SoftHebbConv2d(nn.Module):
             negative_mask.fill_diagonal_(0)
 
         # Compute the gradient of the loss w.r.t. similarity
-        grad_similarity = negative_mask * similarity - positive_mask * similarity.abs()
-        grad_similarity /= similarity.numel()
+        # grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs()
+        grad_similarity = negative_mask * similarity.sign() - positive_mask 
+        grad_similarity /= self.out.shape[0]
 
         # Compute gradient of similarity w.r.t. normalized output (out_norm)
         grad_out = grad_similarity @ out_norm
@@ -375,8 +329,8 @@ class SoftHebbConv2d(nn.Module):
 
         # Manually calculate the gradient
         # grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
-        grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs() #
-
+        grad_similarity = negative_mask * similarity.sign() - positive_mask
+        grad_similarity /= self.out.shape[0]
 
         # Compute the gradient of the loss w.r.t. out
         out_norm_matrix = (out_norm[:, None] * out_norm[None, :]) # [batch_size, batch_size]
@@ -392,7 +346,9 @@ class SoftHebbConv2d(nn.Module):
         # Compute the gradient with respect to the convolutional weights
         conv_weight_grad = torch.nn.grad.conv2d_weight(
             self.x, self.weight.shape, grad_out, self.stride, self.F_padding[0], self.dilation, self.groups
-        ) / batch_size
+        )
+
+        print('grad norm: ', conv_weight_grad.norm())
 
         return - conv_weight_grad 
         

@@ -88,7 +88,7 @@ class SoftHebbLinear(nn.Module):
 
     def target_update_rule(self, target):
         out = self.out.softmax(dim=1)
-        return (target - out).T @ self.x # / self.out.shape[0] 
+        return (target - out).T @ self.x
 
     def update_rule(self, target):
         out = F.tanh(self.out)

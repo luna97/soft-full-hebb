@@ -38,7 +38,7 @@ class DeepSoftHebb(nn.Module):
             use_batch_norm=False,
             label_smoothing=None,
             activation=nn.Tanh(),
-            pooling='max'
+            pooling=POOL_ORIG
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
@@ -54,10 +54,6 @@ class DeepSoftHebb(nn.Module):
 
         self.act = activation
         self.use_batch_norm = use_batch_norm
-        if self.use_batch_norm:
-            self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
-            self.bn2 = nn.BatchNorm2d(out_channels_1, affine=False).requires_grad_(False)
-            self.bn3 = nn.BatchNorm2d(out_channels_2, affine=False).requires_grad_(False)
 
         if pooling == POOL_MAX:
             self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
@@ -92,7 +88,6 @@ class DeepSoftHebb(nn.Module):
             regularize_orth=regularize_orth,
             label_smoothing=label_smoothing
         )
-        self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
         out_size = ((input_size - k_size_1 + 2 * padding_1) // stride_1) + 1
         out_size = ((out_size - pool_k_size_1 + 2 * pool_padding_1) // pool_stride_1) + 1
 
@@ -115,7 +110,6 @@ class DeepSoftHebb(nn.Module):
             regularize_orth=regularize_orth,
             label_smoothing=label_smoothing
         )
-        self.pool2 = nn.MaxPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
         out_size = (out_size - k_size_2 + 2 * padding_2) // stride_2 + 1
         out_size = (out_size - pool_k_size_2 + 2 * pool_padding_2) // pool_stride_2 + 1
 
@@ -138,10 +132,15 @@ class DeepSoftHebb(nn.Module):
             regularize_orth=regularize_orth,
             label_smoothing=label_smoothing
         )
-        self.pool3 = nn.MaxPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
         out_size = (out_size - k_size_3 + 2 * padding_3) // stride_3 + 1
         out_size = (out_size - pool_k_size_3 + 2 * pool_padding_3) // pool_stride_3 + 1
         out_dim = (out_size ** 2) * out_channels_3
+
+        if self.use_batch_norm:
+            self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
+            self.bn2 = nn.BatchNorm2d(out_channels_1, affine=False).requires_grad_(False)
+            self.bn3 = nn.BatchNorm2d(out_channels_2, affine=False).requires_grad_(False)
+            self.bn_out = nn.BatchNorm1d(out_dim, affine=False).requires_grad_(False)
 
         # block 4
         self.flatten = nn.Flatten()
@@ -186,6 +185,7 @@ class DeepSoftHebb(nn.Module):
         # block 4
         out = self.flatten(out)
         if self.neuron_centric and not self.linear_head:
+            #if self.use_batch_norm: out = self.bn_out(out)
             out = self.fc2(self.dropout(out), target=target)
             return out
         else:
