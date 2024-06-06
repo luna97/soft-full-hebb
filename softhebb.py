@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from sklearn.metrics import f1_score
-from model import DeepSoftHebb, CONV, LINEAR, LinearSofHebb
+from model import DeepSoftHebb, CONV, LINEAR, LinearSofHebb, POOL_MAX, POOL_AVG, POOL_ORIG
 import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
@@ -70,6 +70,8 @@ parser.add_argument('--conv_channels', type=int, default=96, help='number of inp
 parser.add_argument('--conv_factor', type=int, default=4, help='factor size for convnet')
 parser.add_argument('--use_batch_norm', action='store_true', help='use batch normalization')
 parser.add_argument('--label_smoothing', type=float, default=None, help='label smoothing factor')
+parser.add_argument('--offline', action='store_true', help='offline training')
+parser.add_argument('--pooling_type', type=str, default=POOL_ORIG, help='pooling type')
 args = parser.parse_args()
 
 device = args.device
@@ -96,6 +98,7 @@ if __name__ == "__main__":
     if args.log: wandb.init(
         project=f"softhebb-{dataset}-{args.net_type}",
         config=vars(args),
+        mode='online' if not args.offline else 'offline'
     )
         
     in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
@@ -133,7 +136,8 @@ if __name__ == "__main__":
             conv_channels=args.conv_channels,
             conv_factor=args.conv_factor,
             use_batch_norm=args.use_batch_norm,
-            label_smoothing=args.label_smoothing
+            label_smoothing=args.label_smoothing,
+            pooling=args.pooling_type
         ).to(device)
 
     model.train()

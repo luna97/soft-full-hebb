@@ -208,10 +208,11 @@ class SoftHebbConv2d(nn.Module):
         # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).sum()
 
         # Add label smoothing to positive and negative masks
-        # positive_mask = (1 - 0.1) * positive_mask + 0.1 / (self.out.shape[0] - 1)
-        # negative_mask = (1 - 0.1) * negative_mask + 0.1 / (self.out.shape[0] - 1)
-        # positive_mask.fill_diagonal_(0)
-        # negative_mask.fill_diagonal_(0)
+        if self.label_smoothing is not None:
+            positive_mask = (1 - self.label_smoothing) * positive_mask + self.label_smoothing / (self.out.shape[0] - 1)
+            negative_mask = (1 - self.label_smoothing) * negative_mask + self.label_smoothing / (self.out.shape[0] - 1)
+            positive_mask.fill_diagonal_(0)
+            negative_mask.fill_diagonal_(0)
 
         # Compute the gradient of the loss w.r.t. similarity
         grad_similarity = channel_mask * similarity.abs()
