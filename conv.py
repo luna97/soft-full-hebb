@@ -283,7 +283,7 @@ class SoftHebbConv2d(nn.Module):
         grad_similarity /= self.out.shape[0]
 
         # Compute gradient of similarity w.r.t. normalized output (out_norm)
-        grad_out = grad_similarity @ out_norm
+        grad_out = grad_similarity @ out_norm + (grad_similarity.T @ out_norm)
 
         # Backpropagate through normalization
         grad_out = (grad_out * norms - out_norm * torch.sum(out * grad_out, dim=1, keepdim=True)) / norms**2
