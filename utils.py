@@ -14,6 +14,9 @@ NONORM = "nonorm"
 DECAY = "decay"
 SOFTMAX = "softmax"
 
+RELU = "relu"
+TANH = "tanh"
+
 def normalize_weights(weights, norm_type, dim=0):
     if norm_type == CLIP:
         return weights.clip(-10, 10)

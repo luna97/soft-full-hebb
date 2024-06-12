@@ -4,7 +4,7 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-from utils import normalize_weights, CLIP
+from utils import normalize_weights, CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, SOFTMAX, TANH, RELU
 from conv import SoftHebbConv2d
 from linear import SoftHebbLinear
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE
@@ -37,8 +37,8 @@ class DeepSoftHebb(nn.Module):
             conv_factor=4,
             use_batch_norm=False,
             label_smoothing=None,
-            activation=nn.Tanh(),
-            pooling=POOL_ORIG
+            pooling=POOL_ORIG,
+            activation=TANH
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
@@ -52,7 +52,14 @@ class DeepSoftHebb(nn.Module):
         pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
         pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
 
-        self.act = activation
+        if activation == RELU:
+            self.act = nn.ReLU()
+        elif activation == TANH:
+            self.act = nn.Tanh()
+        else:
+            self.act = nn.Tanh()
+            activation = TANH
+
         self.use_batch_norm = use_batch_norm
 
         if pooling == POOL_MAX:
@@ -86,7 +93,8 @@ class DeepSoftHebb(nn.Module):
             use_momentum=use_momentum,
             conv_rule=conv_rule,
             regularize_orth=regularize_orth,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         out_size = ((input_size - k_size_1 + 2 * padding_1) // stride_1) + 1
         out_size = ((out_size - pool_k_size_1 + 2 * pool_padding_1) // pool_stride_1) + 1
@@ -108,7 +116,8 @@ class DeepSoftHebb(nn.Module):
             use_momentum=use_momentum,
             conv_rule=conv_rule,
             regularize_orth=regularize_orth,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         out_size = (out_size - k_size_2 + 2 * padding_2) // stride_2 + 1
         out_size = (out_size - pool_k_size_2 + 2 * pool_padding_2) // pool_stride_2 + 1
@@ -130,7 +139,8 @@ class DeepSoftHebb(nn.Module):
             use_momentum=use_momentum,
             conv_rule=conv_rule,
             regularize_orth=regularize_orth,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         out_size = (out_size - k_size_3 + 2 * padding_3) // stride_3 + 1
         out_size = (out_size - pool_k_size_3 + 2 * pool_padding_3) // pool_stride_3 + 1
@@ -156,7 +166,9 @@ class DeepSoftHebb(nn.Module):
                 norm_type=norm_type,
                 last_layer=True,
                 initial_lr=initial_lr * 100,
-                use_momentum=use_momentum
+                use_momentum=use_momentum,
+                label_smoothing=label_smoothing,
+                activation=activation
             )
         else:
             self.classifier = nn.Linear(out_dim, 10)
@@ -221,6 +233,7 @@ class LinearSofHebb(nn.Module):
             initial_lr=0.001,
             use_batch_norm=False,
             label_smoothing=None,
+            activation=TANH
     ):
         super(LinearSofHebb, self).__init__()
 
@@ -232,7 +245,8 @@ class LinearSofHebb(nn.Module):
             norm_type=norm_type,
             initial_lr=initial_lr,
             use_momentum=use_momentum,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         # self.bn1 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
 
@@ -244,7 +258,8 @@ class LinearSofHebb(nn.Module):
             norm_type=norm_type,
             initial_lr=initial_lr,
             use_momentum=use_momentum,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         #self.bn2 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
         self.fc3 = SoftHebbLinear(
@@ -255,7 +270,8 @@ class LinearSofHebb(nn.Module):
             norm_type=norm_type,
             initial_lr=initial_lr,
             use_momentum=use_momentum,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
         #self.bn3 = nn.BatchNorm1d(128, affine=False).requires_grad_(False)
 
@@ -268,7 +284,8 @@ class LinearSofHebb(nn.Module):
             last_layer=True,
             initial_lr=initial_lr,
             use_momentum=use_momentum,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            activation=activation
         )
 
         self.dropout = nn.Dropout(dropout)

@@ -22,7 +22,7 @@ import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from utils import CustomStepLR
-from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY
+from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, RELU, TANH
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE
 
 # torch.autograd.set_detect_anomaly(True)
@@ -39,6 +39,8 @@ available_datasets = [CIFAR10, MNIST, IMAGENET]
 available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
 available_optimizers = [SGD, ADAMW, MOMENTUM]
 available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE]
+available_pooling = [POOL_MAX, POOL_AVG, POOL_ORIG]
+available_activations = [RELU, TANH]
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 
@@ -72,6 +74,7 @@ parser.add_argument('--use_batch_norm', action='store_true', help='use batch nor
 parser.add_argument('--label_smoothing', type=float, default=None, help='label smoothing factor')
 parser.add_argument('--offline', action='store_true', help='offline training')
 parser.add_argument('--pooling_type', type=str, default=POOL_ORIG, help='pooling type')
+parser.add_argument('--activation', type=str, default=TANH, help='activation function')
 args = parser.parse_args()
 
 device = args.device
@@ -93,13 +96,24 @@ if args.optimizer.lower() not in available_optimizers:
 if args.conv_rule.lower() not in available_conv_rules:
     raise ValueError(f"Convolution rule {args.conv_rule} not available. Choose one of {available_conv_rules}")
 
+if args.pooling_type.lower() not in available_pooling:
+    raise ValueError(f"Pooling type {args.pooling_type} not available. Choose one of {available_pooling}")
+
+if args.activation.lower() not in available_activations:
+    raise ValueError(f"Activation function {args.activation} not available. Choose one of {available_activations}")
+
 # Main training loop CIFAR10
 if __name__ == "__main__":
-    if args.log: wandb.init(
-        project=f"softhebb-{dataset}-{args.net_type}",
-        config=vars(args),
-        mode='online' if not args.offline else 'offline'
-    )
+    if args.log:
+        wandb.init(
+            project=f"softhebb-{dataset}-{args.net_type}",
+            config=vars(args),
+            mode='online' if not args.offline else 'offline'
+        )
+        model_name = f'{wandb.run.id}.pth'
+    else:
+        model_name = "best_model.pth"
+        
         
     in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
     input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
@@ -115,7 +129,8 @@ if __name__ == "__main__":
             initial_lr=args.initial_lr,
             use_momentum=not args.no_momentum,
             use_batch_norm=args.use_batch_norm,
-            label_smoothing=args.label_smoothing
+            label_smoothing=args.label_smoothing,
+            activation=args.activation
         ).to(device)
     else:
         model = DeepSoftHebb(
@@ -137,7 +152,8 @@ if __name__ == "__main__":
             conv_factor=args.conv_factor,
             use_batch_norm=args.use_batch_norm,
             label_smoothing=args.label_smoothing,
-            pooling=args.pooling_type
+            pooling=args.pooling_type,
+            activation=args.activation
         ).to(device)
 
     model.train()
@@ -279,7 +295,7 @@ if __name__ == "__main__":
             # best_model = model.save()
             print(f"Best model at epoch: {e}")
             # if args.save_model:
-            torch.save(model, "data/best_model.pth")
+            torch.save(model, f"data/{model_name}")
 
         if args.log:
             wandb.log({
@@ -292,7 +308,7 @@ if __name__ == "__main__":
             })
 
     print(f"loading best model for testing")
-    model = torch.load("data/best_model.pth")
+    model = torch.load(f"data/{model_name}")
 
     # Test loop
     model.eval()
@@ -328,3 +344,6 @@ if __name__ == "__main__":
     # Log final metrics to wandb
     if args.log:
         wandb.log({"Test Accuracy": acc_test, "Test F1": f1_test})
+
+# remove the model 
+os.remove(f"data/{model_name}")

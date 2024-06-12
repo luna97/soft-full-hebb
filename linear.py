@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import math
 
 import torch.nn.grad
-from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, SOFTMAX
+from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, SOFTMAX, RELU, TANH, SOFTMAX
 
 class SoftHebbLinear(nn.Module):
     def __init__(
@@ -19,6 +19,7 @@ class SoftHebbLinear(nn.Module):
             initial_lr=0.001,
             use_momentum=False,
             label_smoothing=None,
+            activation=RELU
     ) -> None:
         """
         Simplified implementation of Conv2d learnt with SoftHebb; an unsupervised, efficient and bio-plausible
@@ -46,6 +47,7 @@ class SoftHebbLinear(nn.Module):
         self.device = device
         self.use_momentum = use_momentum
         self.label_smoothing = label_smoothing
+        self.activation = activation
 
     def forward(self, x, target = None):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
@@ -91,8 +93,12 @@ class SoftHebbLinear(nn.Module):
         return (target - out).T @ self.x
 
     def update_rule(self, target):
-        out = F.tanh(self.out)
-        # out = F.relu(self.out)
+        if self.activation == RELU:
+            out = F.relu(self.out)
+        elif self.activation == TANH:
+            out = torch.tanh(self.out)
+        elif self.activation == SOFTMAX:
+            out = self.out
 
         norms = torch.norm(out, dim=1, keepdim=True, p=2) + 1e-8
         out_norm = out / norms
@@ -130,8 +136,12 @@ class SoftHebbLinear(nn.Module):
         # grad_out = grad_out_norm / norms ** 2
     
         # Backpropagate through tanh
-        grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
-        # grad_out *= (out > 0).float().view_as(grad_out)
+        if self.activation == RELU:
+            grad_out *= (out > 0).float().view_as(grad_out)
+        elif self.activation == TANH:
+            grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
+        elif self.activation == SOFTMAX:
+            grad_out *= out
 
         # Compute the gradient of the loss w.r.t. the input
         grad_weight = grad_out.T @ self.x
