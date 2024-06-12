@@ -67,7 +67,7 @@ class SoftHebbLinear(nn.Module):
             eta = self.Ci * self.Cj * self.lr
 
             if target is not None and self.last_layer: 
-                target = torch.functional.F.one_hot(target, 10).float().to(self.x.device)
+                target = torch.functional.F.one_hot(target.long(), 10).float().to(self.x.device)
                 dw = self.target_update_rule(target)
             else:
                 dw = self.update_rule(target=target)

@@ -20,7 +20,7 @@ import argparse
 from torchvision.transforms import AutoAugment, AutoAugmentPolicy
 import wandb
 import os
-from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
+from datasets import CIFAR10, MNIST, IMAGENET, get_datasets, STL10
 from utils import CustomStepLR
 from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, RELU, TANH
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE
@@ -35,7 +35,7 @@ ADAMW = 'adamw'
 MOMENTUM = 'momentum'
 
 
-available_datasets = [CIFAR10, MNIST, IMAGENET]
+available_datasets = [CIFAR10, MNIST, IMAGENET, STL10]
 available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
 available_optimizers = [SGD, ADAMW, MOMENTUM]
 available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE]
@@ -75,6 +75,7 @@ parser.add_argument('--label_smoothing', type=float, default=None, help='label s
 parser.add_argument('--offline', action='store_true', help='offline training')
 parser.add_argument('--pooling_type', type=str, default=POOL_ORIG, help='pooling type')
 parser.add_argument('--activation', type=str, default=TANH, help='activation function')
+parser.add_argument('--full', action='store_true', help='use full network architecture')
 args = parser.parse_args()
 
 device = args.device
@@ -102,7 +103,6 @@ if args.pooling_type.lower() not in available_pooling:
 if args.activation.lower() not in available_activations:
     raise ValueError(f"Activation function {args.activation} not available. Choose one of {available_activations}")
 
-# Main training loop CIFAR10
 if __name__ == "__main__":
     if args.log:
         wandb.init(
@@ -114,9 +114,8 @@ if __name__ == "__main__":
     else:
         model_name = "best_model.pth"
         
-        
-    in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
-    input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
+    in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET or dataset == STL10 else 1
+    input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224 if dataset == IMAGENET else 96
 
     if args.net_type == LINEAR:
         model = LinearSofHebb(
@@ -153,7 +152,8 @@ if __name__ == "__main__":
             use_batch_norm=args.use_batch_norm,
             label_smoothing=args.label_smoothing,
             pooling=args.pooling_type,
-            activation=args.activation
+            activation=args.activation,
+            full=args.full
         ).to(device)
 
     model.train()

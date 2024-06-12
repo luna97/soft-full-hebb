@@ -38,7 +38,8 @@ class DeepSoftHebb(nn.Module):
             use_batch_norm=False,
             label_smoothing=None,
             pooling=POOL_ORIG,
-            activation=TANH
+            activation=TANH,
+            full=False,
     ):
         super(DeepSoftHebb, self).__init__()
         # block 1
@@ -51,6 +52,7 @@ class DeepSoftHebb(nn.Module):
         pool_k_size_1, pool_k_size_2, pool_k_size_3 = 4, 4, 2
         pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
         pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
+        self.full=full
 
         if activation == RELU:
             self.act = nn.ReLU()
@@ -156,20 +158,44 @@ class DeepSoftHebb(nn.Module):
         self.flatten = nn.Flatten()
 
         if neuron_centric and not linear_head:
-            # self.fc1 = SoftHebbLinear(out_dim, out_dim // 4, device=device, two_steps=two_steps)
-            # self.fc2 = SoftHebbLinear(out_dim // 4, 10, device=device, two_steps=two_steps)
-            self.fc2 = SoftHebbLinear(
-                in_channels=out_dim, 
-                out_channels=10,
-                device=device, 
-                two_steps=two_steps, 
-                norm_type=norm_type,
-                last_layer=True,
-                initial_lr=initial_lr,
-                use_momentum=use_momentum,
-                label_smoothing=label_smoothing,
-                activation=activation
-            )
+            if full:
+                self.fc1 = SoftHebbLinear(
+                    out_dim, 
+                    out_dim // 4,
+                    device=device,
+                    two_steps=two_steps, 
+                    norm_type=norm_type,
+                    last_layer=False,
+                    initial_lr=initial_lr * 10,
+                    use_momentum=use_momentum,
+                    label_smoothing=label_smoothing,
+                    activation=activation
+                )
+                self.fc2 = SoftHebbLinear(
+                    in_channels=out_dim // 4, 
+                    out_channels=10,
+                    device=device, 
+                    two_steps=two_steps, 
+                    norm_type=norm_type,
+                    last_layer=True,
+                    initial_lr=initial_lr * 10,
+                    use_momentum=use_momentum,
+                    label_smoothing=label_smoothing,
+                    activation=activation
+                )
+            else:
+                self.fc2 = SoftHebbLinear(
+                    in_channels=out_dim, 
+                    out_channels=10,
+                    device=device, 
+                    two_steps=two_steps, 
+                    norm_type=norm_type,
+                    last_layer=True,
+                    initial_lr=initial_lr,
+                    use_momentum=use_momentum,
+                    label_smoothing=label_smoothing,
+                    activation=activation
+                )
         else:
             self.classifier = nn.Linear(out_dim, 10)
 
@@ -195,8 +221,11 @@ class DeepSoftHebb(nn.Module):
         # block 4
         out = self.flatten(out)
         if self.neuron_centric and not self.linear_head:
-            #if self.use_batch_norm: out = self.bn_out(out)
-            out = self.fc2(self.dropout(out), target=target)
+            if self.full:
+                out = self.fc1(self.dropout(out), target=target)
+                out = self.fc2(self.dropout(out), target=target)
+            else:
+                out = self.fc2(self.dropout(out), target=target)
             return out
         else:
             return self.classifier(self.dropout(out))
@@ -215,8 +244,11 @@ class DeepSoftHebb(nn.Module):
         self.conv3.step(target=target)
         # self.conv3.step(credit=self.fc2.credit)
         if self.neuron_centric and not self.linear_head:
-            # self.fc1.step(target=target)
-            self.fc2.step(target=target)
+            if self.full:
+                self.fc1.step(target=target)
+                self.fc2.step(target=target)
+            else:
+                self.fc2.step(target=target)
 
 class LinearSofHebb(nn.Module):
     def __init__(
