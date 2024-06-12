@@ -165,7 +165,7 @@ class DeepSoftHebb(nn.Module):
                 two_steps=two_steps, 
                 norm_type=norm_type,
                 last_layer=True,
-                initial_lr=initial_lr * 100,
+                initial_lr=initial_lr,
                 use_momentum=use_momentum,
                 label_smoothing=label_smoothing,
                 activation=activation
@@ -179,8 +179,6 @@ class DeepSoftHebb(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, out, target=None):
-        if target is not None:
-            target = F.one_hot(target, 10).float().to(out.device) # - 0.1
         # block 1
         if self.use_batch_norm: out = self.bn1(out)
         out = self.act(self.conv1(out, target=target))

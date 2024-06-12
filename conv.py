@@ -268,7 +268,8 @@ class SoftHebbConv2d(nn.Module):
 
         # The loss aims to minimize the similarity between samples of the same class
         # and maximize the similarity between samples of different classes
-        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).sum()
+        # loss = (positive_mask * (1 - similarity) + negative_mask * similarity.abs()).mean()
+        # loss.backward()
 
         # Add label smoothing to positive and negative masks
         if self.label_smoothing is not None:
@@ -280,7 +281,7 @@ class SoftHebbConv2d(nn.Module):
         # Compute the gradient of the loss w.r.t. similarity
         # grad_similarity = 2 * (negative_mask - positive_mask) * similarity.abs()
         grad_similarity = negative_mask * similarity.sign() - positive_mask 
-        grad_similarity /= self.out.shape[0]
+        grad_similarity /= similarity.numel()
 
         # Compute gradient of similarity w.r.t. normalized output (out_norm)
         grad_out = grad_similarity @ out_norm + (grad_similarity.T @ out_norm)
@@ -303,7 +304,7 @@ class SoftHebbConv2d(nn.Module):
         # Compute the gradient with respect to the convolutional weights
         conv_weight_grad = torch.nn.grad.conv2d_weight(
             self.x, self.weight.shape, grad_out, self.stride, self.F_padding[0], self.dilation, self.groups
-        )
+        ) 
         return - conv_weight_grad 
     
     def regularize_orthogonality(self):
