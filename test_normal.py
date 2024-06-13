@@ -8,7 +8,25 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from sklearn.metrics import f1_score
-from datasets import get_datasets 
+from datasets import get_datasets, CIFAR10, MNIST, IMAGENET, STL10
+import argparse
+
+parser = argparse.ArgumentParser(description='Training script')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+parser.add_argument('--log', action='store_true', help='Enable logging with wandb')
+parser.add_argument('--dataset', type=str, default='mnist', help='Dataset to use')
+parser.add_argument('--net_type', type=str, default='linear', help='Type of network')
+parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
+parser.add_argument('--no_momentum', action='store_true', help='Disable momentum in optimizer')
+parser.add_argument('--device', type=str, default='cpu', help='Device to use for training')
+parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+parser.add_argument('--run_name', type=str, default='default', help='run name')
+
+args = parser.parse_args()
+
+dataset = args.dataset.lower()
+in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET or dataset == STL10 else 1
+input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224 if dataset == IMAGENET else 96
 
 # Define the Convolutional Neural Network
 class NetConv(nn.Module):
@@ -26,8 +44,8 @@ class NetConv(nn.Module):
         pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
         pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
 
-        self.bn1 = nn.BatchNorm2d(3, affine=False).requires_grad_(False)
-        self.conv1 = nn.Conv2d(3, out_channels_1, k_size_1, stride_1, padding_1)
+        self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
+        self.conv1 = nn.Conv2d(in_channels, out_channels_1, k_size_1, stride_1, padding_1)
         out_size = ((32 - k_size_1 + 2 * padding_1) // stride_1) + 1
         # out_size = ((out_size - pool_k_size_1 + 2 * pool_padding_1) // pool_stride_1) + 1
         #self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
@@ -68,10 +86,10 @@ class NetConv(nn.Module):
 class NetLinear(nn.Module):
     def __init__(self):
         super(NetLinear, self).__init__()
-        self.fc1 = nn.Linear(3072, 512)
-        self.fc2 = nn.Linear(512, 512)
-        self.fc3 = nn.Linear(512, 128)
-        self.fc4 = nn.Linear(128, 10)
+        self.fc1 = nn.Linear((input_size ** 2) * in_channels, 2000)
+        self.fc2 = nn.Linear(2000, 2000)
+        self.fc3 = nn.Linear(2000, 2000)
+        self.fc4 = nn.Linear(2000, 10)
         self.relu = nn.Tanh()
         self.flatten = nn.Flatten()
 
@@ -82,21 +100,15 @@ class NetLinear(nn.Module):
         x = self.relu(self.fc3(x))
         x = self.fc4(x)
         return x
-    
-# Load and preprocess the CIFAR-10 dataset
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-])
 
-batch_size = 64
-log=True
-dataset='cifar10'
-net_type='linear'
-lr = 0.01
-no_momentum = True
-device = 'cpu' # torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
-epochs=50
+batch_size = args.batch_size
+log = args.log
+dataset = args.dataset
+net_type = args.net_type
+lr = args.lr
+no_momentum = args.no_momentum
+device = args.device
+epochs = args.epochs
 dataset_base, train_dataset, val_dataset, test_dataset = get_datasets(dataset)
 
 best_val_f1 = 0.0
@@ -114,10 +126,15 @@ else:
     optimizer = optim.SGD(net.parameters(), lr=lr, momentum=0.9)
 
 # Initialize wandb
-if log: wandb.init(
-    project=f"softhebb-{dataset}-{net_type}",
-    # config=vars(args),
-)
+if log: 
+    wandb.init(
+        project=f"softhebb-{dataset}-{net_type}",
+        config=vars(args),
+        name=args.run_name
+    )
+    model_name = f'{wandb.run.id}.pth'
+else:
+    model_name = "best_model_normal.pth"
 
 epoch_pbar = tqdm(range(epochs))
 total = len(train_dataloader)
@@ -195,7 +212,7 @@ for e in epoch_pbar:  # Change the number of epochs as needed
         # best_model = model.save()
         print(f"Best model at epoch: {e}")
         # if args.save_model:
-        torch.save(net, "data/best_model_normal.pth")
+        torch.save(net, f"data/{model_name}.pth")
 
     if log:
         wandb.log({
@@ -208,7 +225,7 @@ for e in epoch_pbar:  # Change the number of epochs as needed
         })
 
 print(f"loading best model for testing")
-model = torch.load("data/best_model_normal.pth")
+model = torch.load(f"data/{model_name}.pth")
 
 # Test loop
 model.eval()
