@@ -25,10 +25,6 @@ from utils import CustomStepLR
 from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, RELU, TANH
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE
 
-# torch.autograd.set_detect_anomaly(True)
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-
 # optimizers
 SGD = 'sgd'
 ADAMW = 'adamw'
@@ -46,9 +42,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.ba
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
-parser.add_argument('--lr', type=float, default=0.00001, help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=0.001, help='weight decay')
-parser.add_argument('--batch_size', type=int, default=64, help='batch size')
+parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
+parser.add_argument('--weight_decay', type=float, default=0.01, help='weight decay')
+parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
@@ -76,7 +72,14 @@ parser.add_argument('--offline', action='store_true', help='offline training')
 parser.add_argument('--pooling_type', type=str, default=POOL_ORIG, help='pooling type')
 parser.add_argument('--activation', type=str, default=TANH, help='activation function')
 parser.add_argument('--full', action='store_true', help='use full network architecture')
+parser.add_argument('--deterministic', action='store_true', help='set random seed')
+parser.add_argument('--run_name', type=str, default='default', help='run name')
 args = parser.parse_args()
+
+if args.deterministic:
+    # torch.autograd.set_detect_anomaly(True)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
 
 device = args.device
 
@@ -108,7 +111,8 @@ if __name__ == "__main__":
         wandb.init(
             project=f"softhebb-{dataset}-{args.net_type}",
             config=vars(args),
-            mode='online' if not args.offline else 'offline'
+            mode='online' if not args.offline else 'offline',
+            name=args.run_name
         )
         model_name = f'{wandb.run.id}.pth'
     else:

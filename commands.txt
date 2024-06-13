@@ -1,0 +1,2 @@
+deep linear, top perf:
+python3 softhebb.py --initial_lr=0.001 --lr=0.02 --weight_decay=0.01 --batch_size=32 --epochs=50 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=top_perf --offline --log
