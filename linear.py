@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import math
 
 import torch.nn.grad
-from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, SOFTMAX, RELU, TANH, SOFTMAX
+from utils import normalize_weights, CLIP, L2NORM, L1NORM, MAXNORM, SOFTMAX, RELU, TANH, SOFTMAX
 
 class SoftHebbLinear(nn.Module):
     def __init__(
@@ -31,6 +31,7 @@ class SoftHebbLinear(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.norm_type = norm_type
+        self.device = device
         
         weight = torch.empty((out_channels, in_channels)).requires_grad_(False).to(device)
         nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
@@ -40,8 +41,8 @@ class SoftHebbLinear(nn.Module):
 
         self.Ci = nn.Parameter(torch.ones(1, in_channels), requires_grad=True)
         self.Cj = nn.Parameter(torch.ones(out_channels, 1), requires_grad=True)
+
         self.two_steps = two_steps
-        self.credit = torch.ones(in_channels).requires_grad_(False).to(device)
         self.last_layer = last_layer
         self.lr = initial_lr
         self.device = device
@@ -51,26 +52,30 @@ class SoftHebbLinear(nn.Module):
 
     def forward(self, x, target = None):
         # x = x / (x.norm(dim=1, keepdim=True) + 1e-30)
-        tortn = F.linear(x, self.weight)
-        self.x = x.clone().detach()
-        self.out = tortn.clone().detach()
+        out = F.linear(x, self.weight)
 
         if self.two_steps:
-            self.step(target)
+            self.step(x.detach(), out.detach(), target)
             return F.linear(x, self.weight)
+        else:
+            self.x = x.detach()
+            self.out = out.detach()
 
-        return tortn
+        return out
     
-    def step(self, target=None):
+    def step(self, x=None, out=None, target=None):
         if self.training:
             self.weight = self.weight.detach()
             eta = self.Ci * self.Cj * self.lr
+            x = self.x if x is None else x
+            out = self.out if out is None else out
 
             if target is not None and self.last_layer: 
-                target = torch.functional.F.one_hot(target.long(), 10).float().to(self.x.device)
-                dw = self.target_update_rule(target)
+                target = torch.functional.F.one_hot(target.long(), 10).float().to(self.device)
+
+                dw = self.target_update_rule(x, out, target)
             else:
-                dw = self.update_rule(target=target)
+                dw = self.update_rule(x, out, target=target)
             if self.use_momentum:
                 if self.momentum is not None:
                     self.momentum = self.momentum * 0.9 + dw.detach() * 0.1
@@ -81,22 +86,23 @@ class SoftHebbLinear(nn.Module):
                 self.weight = self.weight + dw.detach() * eta
             
             #self.weight = self.weight + dw.detach() * eta
-            self.weight = normalize_weights(self.weight, L2NORM, dim=0)
+            self.weight = normalize_weights(self.weight, L2NORM, dim=0).detach()
 
+            eta = None
             self.x = None
             self.out = None
 
-    def target_update_rule(self, target):
-        out = self.out.softmax(dim=1)
-        return (target - out).T @ self.x
+    def target_update_rule(self, x, out, target):
+        out = out.softmax(dim=1)
+        return (target - out).T @ x
 
-    def update_rule(self, target):
+    def update_rule(self, x, out, target):
         if self.activation == RELU:
-            out = F.relu(self.out)
+            out = F.relu(out)
         elif self.activation == TANH:
-            out = torch.tanh(self.out)
+            out = torch.tanh(out)
         elif self.activation == SOFTMAX:
-            out = self.out
+            out = out
 
         norms = torch.norm(out, dim=1, keepdim=True, p=2) + 1e-8
         out_norm = out / norms
@@ -142,5 +148,5 @@ class SoftHebbLinear(nn.Module):
             grad_out *= out
 
         # Compute the gradient of the loss w.r.t. the input
-        grad_weight = grad_out.T @ self.x
+        grad_weight = grad_out.T @ x
         return - grad_weight

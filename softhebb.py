@@ -52,7 +52,6 @@ parser.add_argument('--save_model', action='store_true', help='save model')
 # parser.add_argument('--augment_data', action='store_true', help='use data augmentation')
 parser.add_argument('--dataset', type=str, default='cifar10', help='dataset to use (cifar10, mnist, or imagenet)')
 parser.add_argument('--neuron_centric', action='store_true', help='use neuron-centric learning')
-parser.add_argument('--unsupervised_first', action='store_true', help='unsupervised training first')
 parser.add_argument('--learn_t', action='store_true', help='learn temperature')
 parser.add_argument('--normalization', type=str, default="clip")
 parser.add_argument('--two_step', action='store_true', help='use two steps learning')
@@ -142,7 +141,6 @@ if __name__ == "__main__":
             dropout=args.dropout, 
             input_size=input_size, 
             neuron_centric=args.neuron_centric,
-            unsupervised_first=args.unsupervised_first,
             learn_t_invert=args.learn_t,
             norm_type=normalization,
             two_steps=args.two_step,
@@ -162,7 +160,8 @@ if __name__ == "__main__":
 
     model.train()
 
-    params_to_optimize = model.parameters() if args.neuron_centric and not args.unsupervised_first else model.classifier.parameters()
+    params_to_optimize = [param for _, param in model.named_parameters() if param.requires_grad] if args.neuron_centric else model.classifier.parameters()
+
 
     if args.optimizer.lower() == ADAMW:
         optimizer = AdamW(params_to_optimize, lr=args.lr, weight_decay=args.weight_decay)
@@ -187,67 +186,48 @@ if __name__ == "__main__":
 
     print(f"Training on {dataset} with {len(train_dataset)} training samples, {len(val_dataset)} validation samples, and {len(test_dataset)} test samples")
 
-    # Unsupervised training with SoftHebb
     total = len(train_dataloader)
-
-    # best_model = None
     best_val_f1 = 0.0
-
-    # show the full dataset to the model before training
-    if args.unsupervised_first:
-        if os.path.exists("conv_model.pth"):
-            print("Loading weights from pre-trained model..")
-            state_dict = torch.load("conv_model.pth", map_location=device)
-            print("Found state dict with keys: ", state_dict.keys())
-            # model.load_state_dict(state_dict, strict=False)
-            model.conv1.weight = state_dict['conv1.weight']
-            model.conv2.weight = state_dict['conv2.weight']
-            model.conv3.weight = state_dict['conv3.weight']
-        else:
-            print("Unsupervised hebbian learning.. ")
-            full_dataloader = DataLoader(dataset_base, batch_size=10, shuffle=True)
-            with torch.no_grad():
-                for data in tqdm(full_dataloader):
-                    inputs, _ = data
-                    inputs = inputs.to(device)
-                    _ = model(inputs)
-            # save the model
-            print("Saving model with keys: ", model.state_dict().keys())
-            torch.save(model.state_dict(), "conv_model.pth")
-        model.unsupervised_eval()
 
     epoch_pbar = tqdm(range(args.epochs))
     for e in epoch_pbar:
         model.train()
-        if args.unsupervised_first:
-            model.unsupervised_eval()
         running_loss = 0.
         train_correct = []
         train_targets = []
         correct = 0
         train_total = 0
+        # print memory requirement for the model
+        # print(f"Memory requirement for the model: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         pbar = tqdm(enumerate(train_dataloader, 0), total=total)
         for i, data in pbar:
             inputs, targets = data
             inputs = inputs.to(device)
             targets = targets.to(device)
 
+            # if i <= 10: print(f"Memory requirement for the model step 1: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
             if args.neuron_centric:
                 outputs = model(inputs, targets)
             else:
                 outputs = model(inputs)
 
+            # if i <= 10: print(f"Memory requirement for the model step 2: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
             loss = criterion(outputs, targets)
 
             if loss.grad_fn is not None:
                 loss.backward()
-                # count non-zero gradients
-                # print(f"fc grad: {model.classifier.Ci.grad.abs().sum()}")
                 optimizer.step()
                 optimizer.zero_grad()
 
+            # if i <= 10: print(f"Memory requirement for the model step 3: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
             if not args.two_step:
                 model.step(targets)    
+
+            # if i <= 10: print(f"Memory requirement for the model step 4: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
 
 
             running_loss += loss.item()
@@ -262,6 +242,9 @@ if __name__ == "__main__":
             scheduler.step()
         acc_train = correct / train_total
         f1_train = f1_score(torch.cat(train_targets), torch.cat(train_correct), average='macro')
+
+        # print(f"Memory requirement for the model: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
 
         # Validation loop
         model.eval()
@@ -287,7 +270,8 @@ if __name__ == "__main__":
                 _, predicted = torch.max(outputs.data, 1)
                 val_targets.append(targets.detach().cpu())
                 val_correct.append(predicted.detach().cpu())
-                correct += (predicted == targets).sum().item()  
+                correct += (predicted == targets).sum().item() 
+                
                 
         acc = correct / total_val
         f1 = f1_score(torch.cat(val_targets), torch.cat(val_correct), average='macro')
@@ -300,6 +284,7 @@ if __name__ == "__main__":
             print(f"Best model at epoch: {e}")
             # if args.save_model:
             torch.save(model, f"data/{model_name}")
+
 
         if args.log:
             wandb.log({

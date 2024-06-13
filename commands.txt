@@ -12,6 +12,16 @@ python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_si
 
 
 CIFAR 10:
-
+top:
 python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=cifar10 --run_name=top_perf_100 --offline --log
 
+lbl_smooth:
+python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=cifar10 --run_name=label_smooth --offline --log --label_smoothing=0.1
+
+no momentum:
+python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=cifar10 --run_name=no_momentum --offline --log --no_momentum
+
+
+CIFAR10 CONV:
+
+python3 softhebb.py --initial_lr=0.0001 --lr=0.03 --weight_decay=0.00003 --batch_size=32 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=4  --run_name=top_perf_50 --offline --log

@@ -24,7 +24,6 @@ class DeepSoftHebb(nn.Module):
             dropout=0.0, 
             input_size=32, 
             neuron_centric=False, 
-            unsupervised_first=False, 
             learn_t_invert=False, 
             norm_type=CLIP,
             two_steps=False,
@@ -87,7 +86,7 @@ class DeepSoftHebb(nn.Module):
             device=device, 
             initial_lr=initial_lr,
             first_layer=True,
-            neuron_centric=neuron_centric and not unsupervised_first,
+            neuron_centric=neuron_centric,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
@@ -110,7 +109,7 @@ class DeepSoftHebb(nn.Module):
             device=device, 
             padding=padding_2,
             initial_lr=initial_lr,
-            neuron_centric=neuron_centric and not unsupervised_first,
+            neuron_centric=neuron_centric,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
@@ -133,7 +132,7 @@ class DeepSoftHebb(nn.Module):
             padding=padding_3,
             device=device,
             initial_lr=initial_lr,
-            neuron_centric=neuron_centric and not unsupervised_first,
+            neuron_centric=neuron_centric,
             learn_t_invert=learn_t_invert,
             norm_type=norm_type,
             two_steps=two_steps,
@@ -190,8 +189,9 @@ class DeepSoftHebb(nn.Module):
                     device=device, 
                     two_steps=two_steps, 
                     norm_type=norm_type,
+                    # norm_type=L2NORM,
                     last_layer=True,
-                    initial_lr=initial_lr,
+                    initial_lr=initial_lr * 100,
                     use_momentum=use_momentum,
                     label_smoothing=label_smoothing,
                     activation=activation
@@ -200,7 +200,6 @@ class DeepSoftHebb(nn.Module):
             self.classifier = nn.Linear(out_dim, 10)
 
         self.neuron_centric = neuron_centric
-        self.unsupervised_first = unsupervised_first
         self.linear_head = linear_head
         self.dropout = nn.Dropout(dropout)
         
@@ -229,20 +228,12 @@ class DeepSoftHebb(nn.Module):
             return out
         else:
             return self.classifier(self.dropout(out))
-        
-    def unsupervised_eval(self):
-        self.conv1.eval()
-        self.conv2.eval()
-        self.conv3.eval()
-        self.bn1.eval()
-        self.bn2.eval()
-        self.bn3.eval()
+
 
     def step(self, target):
         self.conv1.step(target=target)
         self.conv2.step(target=target)
         self.conv3.step(target=target)
-        # self.conv3.step(credit=self.fc2.credit)
         if self.neuron_centric and not self.linear_head:
             if self.full:
                 self.fc1.step(target=target)
