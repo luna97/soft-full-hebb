@@ -269,7 +269,7 @@ class LinearSofHebb(nn.Module):
 
         self.fc1 = SoftHebbLinear(
             in_channels=in_channels * (input_size ** 2), 
-            out_channels=512,
+            out_channels=2000,
             device=device, 
             two_steps=two_steps, 
             norm_type=norm_type,
@@ -281,8 +281,8 @@ class LinearSofHebb(nn.Module):
         # self.bn1 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
 
         self.fc2 = SoftHebbLinear(
-            in_channels=512, 
-            out_channels=512,
+            in_channels=2000, 
+            out_channels=2000,
             device=device, 
             two_steps=two_steps, 
             norm_type=norm_type,
@@ -293,8 +293,8 @@ class LinearSofHebb(nn.Module):
         )
         #self.bn2 = nn.BatchNorm1d(512, affine=False).requires_grad_(False)
         self.fc3 = SoftHebbLinear(
-            in_channels=512, 
-            out_channels=128,
+            in_channels=2000, 
+            out_channels=2000,
             device=device, 
             two_steps=two_steps, 
             norm_type=norm_type,
@@ -304,9 +304,8 @@ class LinearSofHebb(nn.Module):
             activation=activation
         )
         #self.bn3 = nn.BatchNorm1d(128, affine=False).requires_grad_(False)
-
         self.fc4 = SoftHebbLinear(
-            in_channels=128, 
+            in_channels=2000, 
             out_channels=10,
             device=device, 
             two_steps=two_steps, 
