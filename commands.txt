@@ -2,13 +2,16 @@
 MNIST: 
 
 top perf 100:
-python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=top_perf_100 --offline --log
+python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=top_perf_100_opt --offline --log
 
 label smoothing:
 python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=label_smooth --offline --log --label_smoothing=0.1
 
 no momentum:
-python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=no_momentum --offline --log --no_momentum
+python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_size=32 --epochs=100 --neuron_centric --normalization=l2norm --net_type=linear --dataset=mnist --run_name=no_momentum_opt --offline --log --no_momentum
+
+backprop:
+
 
 
 CIFAR 10:
@@ -23,5 +26,21 @@ python3 softhebb.py --initial_lr=0.001 --lr=0.03 --weight_decay=0.003 --batch_si
 
 
 CIFAR10 CONV:
+factor_4:
+python3 softhebb.py --initial_lr=0.0001 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=4 --dropout=0.3 --run_name=factor_4 --offline --log --linear_initial_lr=0.001 --linear_norm_type=l2norm --full
 
-python3 softhebb.py --initial_lr=0.0001 --lr=0.03 --weight_decay=0.00003 --batch_size=32 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=4  --run_name=top_perf_50 --offline --log
+factor_2
+python3 softhebb.py --initial_lr=0.0001 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=2 --dropout=0.1 --run_name=factor_2 --offline --log --linear_initial_lr=0.001 --linear_norm_type=l2norm --full
+
+factor_1
+python3 softhebb.py --initial_lr=0.0001 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=1 --dropout=0. --run_name=factor_1 --offline --log --linear_initial_lr=0.001 --linear_norm_type=l2norm --full
+
+relu
+python3 softhebb.py --initial_lr=0.0001 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=4 --dropout=0.3 --run_name=relu_f4 --offline --log --linear_initial_lr=0.001 --linear_norm_type=l2norm --full --activation=relu
+
+label_smoothing
+python3 softhebb.py --initial_lr=0.0001 --epochs=50 --neuron_centric --normalization=clip --net_type=conv --dataset=cifar10 --conv_channels=96 --conv_factor=4 --dropout=0.3 --run_name=label_smoothing --offline --log --linear_initial_lr=0.001 --linear_norm_type=l2norm --full --label_smoothing=0.2
+
+backprop:
+python3 test_normal.py --dataset=cifar10 --net_type=conv --run_name=backprop_f4 --dropout=0.3 --offline --log --epochs=50
+

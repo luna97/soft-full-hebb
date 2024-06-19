@@ -51,10 +51,10 @@ class FastMNIST(torchvision.datasets.MNIST):
         device = kwargs.pop('device', "cpu")
         super().__init__(*args, **kwargs)
 
-        data = torch.tensor(self.data, dtype=torch.float, device=device).div_(255)
-        data = torch.movedim(data, -1, 1)
-        self.data = transforms.functional.normalize(data, mean=(0.5,), std=(0.5,)).unsqueeze(1)
-        self.targets = torch.tensor(self.targets, device=device)
+        self.data = self.data.to(dtype=torch.float, device=device).div_(255)
+        self.data = torch.movedim(self.data, -1, 1)
+        self.data = transforms.functional.normalize(self.data, mean=(0.5,), std=(0.5,)).unsqueeze(1)
+        self.targets = self.targets.to(device=device)
 
     def __getitem__(self, index: int):
         """
@@ -109,17 +109,27 @@ def get_datasets(dataset):
     Get the dataset and split it into training, validation, and test sets.
     """
     if dataset == CIFAR10:
+        # transform = transforms.Compose([
+        #    transforms.ToTensor(),
+        #    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        #])
         dataset_base = FastCIFAR10(root='./data', train=True, download=True)
-        # dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform_train, download=True)
+        #dataset_base = datasets.CIFAR10(root='./data', train=True, transform=transform, download=True)
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
         train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
         test_dataset = FastCIFAR10(root='./data', train=False, download=True)
-        # test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
+        #test_dataset = datasets.CIFAR10(root='./data', train=False, transform=transform, download=True)
     elif dataset == MNIST:
+        #transform = transforms.Compose([
+        #    transforms.ToTensor(),
+        #    transforms.Normalize(mean=[0.5], std=[0.5])
+        #])
         dataset_base = FastMNIST(root='./data', train=True, download=True)
+        # dataset_base = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
         split = [ math.floor(0.9 * len(dataset_base)), math.ceil(0.1 * len(dataset_base)) ]
         train_dataset, val_dataset = torch.utils.data.random_split(dataset_base, split)
         test_dataset = FastMNIST(root='./data', train=False, download=True)
+        #test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
     elif dataset == IMAGENET:
         transform = transforms.Compose([
             transforms.Resize(224),

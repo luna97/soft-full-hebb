@@ -11,6 +11,7 @@ from sklearn.metrics import f1_score
 from datasets import get_datasets, CIFAR10, MNIST, IMAGENET, STL10
 import argparse
 from torch.optim import AdamW
+from model import NetConv, NetLinear
 
 parser = argparse.ArgumentParser(description='Training script')
 parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
@@ -19,93 +20,19 @@ parser.add_argument('--dataset', type=str, default='mnist', help='Dataset to use
 parser.add_argument('--net_type', type=str, default='linear', help='Type of network')
 parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
 parser.add_argument('--no_momentum', action='store_true', help='Disable momentum in optimizer')
-parser.add_argument('--device', type=str, default='cpu', help='Device to use for training')
-parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+parser.add_argument('--device', type=str, default='cuda', help='Device to use for training')
+parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
 parser.add_argument('--run_name', type=str, default='default', help='run name')
 parser.add_argument('--offline', action='store_true', help='offline training')
 parser.add_argument('--optimizer', type=str, default='momentum', help='optimizer to use')
 parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
+parser.add_argument('--conv_factor', type=int, default=4, help='conv factor')
 
 args = parser.parse_args()
 
 dataset = args.dataset.lower()
 in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET or dataset == STL10 else 1
 input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224 if dataset == IMAGENET else 96
-
-# Define the Convolutional Neural Network
-class NetConv(nn.Module):
-    def __init__(self):
-        super(NetConv, self).__init__()
-        lol = 96
-        out_channels_1 = lol
-        out_channels_2 = out_channels_1 * 2
-        out_channels_3 = out_channels_2 * 2
-        k_size_1, k_size_2, k_size_3 = 5, 3, 3
-        stride_1, stride_2, stride_3 = 1, 1, 1
-        padding_1, padding_2, padding_3 = 2, 1, 1
-        pool_k_size_1, pool_k_size_2, pool_k_size_3 = 4, 4, 2
-        pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
-        pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
-
-        self.bn1 = nn.BatchNorm2d(in_channels, affine=False).requires_grad_(False)
-        self.conv1 = nn.Conv2d(in_channels, out_channels_1, k_size_1, stride_1, padding_1)
-        out_size = ((32 - k_size_1 + 2 * padding_1) // stride_1) + 1
-        out_size = ((out_size - pool_k_size_1 + 2 * pool_padding_1) // pool_stride_1) + 1
-        self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
-
-        self.bn2 = nn.BatchNorm2d(out_channels_1, affine=False).requires_grad_(False)
-        self.conv2 = nn.Conv2d(out_channels_1, out_channels_2, k_size_2, stride_2, padding_2)
-        out_size = (out_size - k_size_2 + 2 * padding_2) // stride_2 + 1
-        out_size = (out_size - pool_k_size_2 + 2 * pool_padding_2) // pool_stride_2 + 1
-        self.pool2 = nn.MaxPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
-
-        self.bn3 = nn.BatchNorm2d(out_channels_2, affine=False).requires_grad_(False)
-        self.conv3 = nn.Conv2d(out_channels_2, out_channels_3, k_size_3, stride_3, padding_3)
-        out_size = (out_size - k_size_3 + 2 * padding_3) // stride_3 + 1
-        out_size = (out_size - pool_k_size_3 + 2 * pool_padding_3) // pool_stride_3 + 1
-        self.pool3 = nn.MaxPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
-        
-        out_dim = (out_size ** 2) * out_channels_3
-        print(out_dim)
-        self.bn_out = nn.BatchNorm1d(out_dim, affine=False).requires_grad_(False)
-        self.fc1 = nn.Linear(out_dim, 10)
-        #self.fc2 = nn.Linear(out_dim // 4, 10)
-        self.relu = nn.ReLU()
-        self.flatten = nn.Flatten()
-
-    def forward(self, x):
-        x = self.bn1(x)
-        x = self.relu(self.conv1(x))
-        x = self.pool1(x)
-        x = self.bn2(x)
-        x = self.relu(self.conv2(x))
-        x = self.pool2(x)
-        x = self.bn3(x)
-        x = self.relu(self.conv3(x))
-        x = self.pool3(x)
-        x = self.flatten(x)
-        # x = self.bn_out(x)
-        #x = self.relu(self.fc1(x))
-        x = self.fc1(x)
-        return x
-
-class NetLinear(nn.Module):
-    def __init__(self):
-        super(NetLinear, self).__init__()
-        self.fc1 = nn.Linear((input_size ** 2) * in_channels, 2000)
-        self.fc2 = nn.Linear(2000, 2000)
-        self.fc3 = nn.Linear(2000, 2000)
-        self.fc4 = nn.Linear(2000, 10)
-        self.relu = nn.Tanh()
-        self.flatten = nn.Flatten()
-
-    def forward(self, x):
-        x = self.flatten(x)
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.relu(self.fc3(x))
-        x = self.fc4(x)
-        return x
 
 batch_size = args.batch_size
 log = args.log
@@ -124,7 +51,7 @@ val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False) 
 
 # Initialize the network and optimizer
-net = NetConv().to(device)
+net = NetConv(conv_factor=args.conv_factor, dropout=args.dropout, in_channels=in_channels) if net_type == 'conv' else NetLinear(in_channels=in_channels, input_size=input_size)
 criterion = nn.CrossEntropyLoss(reduction='mean')
 optimizer = AdamW(net.parameters(), lr=lr)
 if args.optimizer == 'adamw':
@@ -223,7 +150,7 @@ for e in epoch_pbar:  # Change the number of epochs as needed
         # best_model = model.save()
         print(f"Best model at epoch: {e}")
         # if args.save_model:
-        torch.save(net, f"data/{model_name}.pth")
+        torch.save(net, f"data/{model_name}")
 
     if log:
         wandb.log({
@@ -236,7 +163,7 @@ for e in epoch_pbar:  # Change the number of epochs as needed
         })
 
 print(f"loading best model for testing")
-model = torch.load(f"data/{model_name}.pth")
+model = torch.load(f"data/{model_name}")
 
 # Test loop
 model.eval()

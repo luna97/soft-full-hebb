@@ -13,6 +13,7 @@ MAXNORM = "maxnorm"
 NONORM = "nonorm"
 DECAY = "decay"
 SOFTMAX = "softmax"
+TRIANGLE = "triangle"
 
 RELU = "relu"
 TANH = "tanh"
@@ -90,3 +91,14 @@ class CustomStepLR(StepLR):
             return [group['lr'] * 0.5
                     for group in self.optimizer.param_groups]
         return [group['lr'] for group in self.optimizer.param_groups]
+    
+
+class Triangle(nn.Module):
+    def __init__(self, power: float = 1, inplace: bool = True):
+        super(Triangle, self).__init__()
+        self.inplace = inplace
+        self.power = power
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        input = input - torch.mean(input.data, axis=1, keepdims=True)
+        return F.relu(input, inplace=self.inplace) ** self.power

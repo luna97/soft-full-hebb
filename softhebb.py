@@ -22,7 +22,7 @@ import wandb
 import os
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets, STL10
 from utils import CustomStepLR
-from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, RELU, TANH
+from utils import CLIP, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, RELU, TANH, TRIANGLE
 from conv import SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE
 
 # optimizers
@@ -36,14 +36,14 @@ available_normalizations = [L1NORM, L2NORM, MAXNORM, CLIP, NONORM, DECAY]
 available_optimizers = [SGD, ADAMW, MOMENTUM]
 available_conv_rules = [SOFTHEBB, ANTIHEBB, CHANNEL, SAMPLE, CHSAMPLE]
 available_pooling = [POOL_MAX, POOL_AVG, POOL_ORIG]
-available_activations = [RELU, TANH]
+available_activations = [RELU, TANH, TRIANGLE]
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SoftHebb Training')
-parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=0.01, help='weight decay')
+parser.add_argument('--lr', type=float, default=0.03, help='learning rate')
+parser.add_argument('--weight_decay', type=float, default=0.003, help='weight decay')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--log', action='store_true', help='enable logging with wandb')
@@ -73,6 +73,9 @@ parser.add_argument('--activation', type=str, default=TANH, help='activation fun
 parser.add_argument('--full', action='store_true', help='use full network architecture')
 parser.add_argument('--deterministic', action='store_true', help='set random seed')
 parser.add_argument('--run_name', type=str, default='default', help='run name')
+parser.add_argument('--linear_initial_lr', type=float, default=None, help='initial learning rate for linear model')
+parser.add_argument('--linear_norm_type', type=str, default=None, help='normalization type for linear model')
+parser.add_argument('--conv_depth', type=int, default=3, help='depth of the convolutional network')
 args = parser.parse_args()
 
 if args.deterministic:
@@ -119,7 +122,6 @@ if __name__ == "__main__":
         
     in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET or dataset == STL10 else 1
     input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224 if dataset == IMAGENET else 96
-
     if args.net_type == LINEAR:
         model = LinearSofHebb(
             in_channels=in_channels,
@@ -132,9 +134,11 @@ if __name__ == "__main__":
             use_momentum=not args.no_momentum,
             use_batch_norm=args.use_batch_norm,
             label_smoothing=args.label_smoothing,
-            activation=args.activation
+            activation=args.activation.lower()
         ).to(device)
     else:
+        linear_initial_lr = args.linear_initial_lr if args.linear_initial_lr is not None else args.initial_lr
+        linear_norm_type = args.linear_norm_type if args.linear_norm_type is not None else normalization
         model = DeepSoftHebb(
             device=device,
             in_channels=in_channels, 
@@ -154,8 +158,11 @@ if __name__ == "__main__":
             use_batch_norm=args.use_batch_norm,
             label_smoothing=args.label_smoothing,
             pooling=args.pooling_type,
-            activation=args.activation,
-            full=args.full
+            activation=args.activation.lower(),
+            full=args.full,
+            linear_initial_lr=linear_initial_lr,
+            linear_norm_type=linear_norm_type,
+            conv_depth=args.conv_depth
         ).to(device)
 
     model.train()
@@ -198,21 +205,17 @@ if __name__ == "__main__":
         correct = 0
         train_total = 0
         # print memory requirement for the model
-        # print(f"Memory requirement for the model: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        # print(f"Memory requirement for the model: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         pbar = tqdm(enumerate(train_dataloader, 0), total=total)
         for i, data in pbar:
             inputs, targets = data
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            # if i <= 10: print(f"Memory requirement for the model step 1: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-
             if args.neuron_centric:
                 outputs = model(inputs, targets)
             else:
                 outputs = model(inputs)
-
-            # if i <= 10: print(f"Memory requirement for the model step 2: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
 
             loss = criterion(outputs, targets)
 
@@ -221,14 +224,8 @@ if __name__ == "__main__":
                 optimizer.step()
                 optimizer.zero_grad()
 
-            # if i <= 10: print(f"Memory requirement for the model step 3: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-
             if not args.two_step:
-                model.step(targets)    
-
-            # if i <= 10: print(f"Memory requirement for the model step 4: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-
-
+                model.step(targets)
 
             running_loss += loss.item()
             train_total += targets.size(0)

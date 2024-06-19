@@ -2,7 +2,7 @@ import torch
 from torchvision import datasets, transforms
 from torch.utils.data import Subset, DataLoader
 import wandb
-from model import DeepSoftHebb, CLIP, LinearSofHebb
+from model import DeepSoftHebb, CLIP, LinearSofHebb, NetConv, NetLinear
 from datasets import CIFAR10, MNIST, IMAGENET, get_datasets
 from tqdm import tqdm
 from sklearn.metrics import f1_score
@@ -70,33 +70,51 @@ in_channels = 3 if dataset == CIFAR10 or dataset == IMAGENET else 1
 input_size = 32 if dataset == CIFAR10 else 28 if dataset == MNIST else 224
 lr = 0.1
 wd = 0.001
-linear = True
+linear = False
+backprop = True
 
 if linear:
-    model = LinearSofHebb(
-        in_channels=in_channels,
-        norm_type='l2norm',
-        two_steps=False,
-        device=device,
-        dropout=0.,
-        input_size=input_size,
-        initial_lr=0.001,
-        use_momentum=True
-    ).to(device)
+    if not backprop:
+        model = LinearSofHebb(
+            in_channels=in_channels,
+            norm_type='l2norm',
+            two_steps=False,
+            device=device,
+            dropout=0.,
+            input_size=input_size,
+            initial_lr=0.001,
+            use_momentum=True
+        ).to(device)
+    else:
+        model = NetLinear(
+            in_channels=in_channels,
+            input_size=input_size,
+            dropout=0.1
+        ).to(device)
 else:
-    model = DeepSoftHebb(
-        device=device,
-        in_channels=in_channels,
-        dropout=0.1, 
-        input_size=input_size,
-        neuron_centric=True,
-        unsupervised_first=False,
-        learn_t_invert=False,
-        norm_type=CLIP,
-        two_steps=False,
-        linear_head=False
-    ).to(device)
-
+    if not backprop:
+        model = DeepSoftHebb(
+            device=device,
+            in_channels=in_channels,
+            dropout=0.1, 
+            input_size=input_size,
+            neuron_centric=True,
+            learn_t_invert=False,
+            norm_type=CLIP,
+            two_steps=False,
+            linear_head=False,
+            use_momentum=True,
+            initial_lr=0.0001,
+            linear_norm_type='l2norm',
+            linear_initial_lr=0.001,
+            conv_factor=2
+        ).to(device)
+    else:
+        model = NetConv(
+            in_channels=in_channels,
+            conv_factor=2,
+            dropout=0.1
+        ).to(device)
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
@@ -123,7 +141,10 @@ for i, (train_loader, val_loader, test_loader) in enumerate(zip(train_loaders, v
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            outputs = model(inputs, targets)
+            if not backprop:
+                outputs = model(inputs, targets)
+            else:
+                outputs = model(inputs)
 
             loss = loss_fn(outputs, targets)
 
@@ -132,8 +153,8 @@ for i, (train_loader, val_loader, test_loader) in enumerate(zip(train_loaders, v
                 optimizer.step()
                 optimizer.zero_grad()
 
-            model.step(targets)    
-
+            if not backprop:
+                model.step(targets)    
 
             running_loss += loss.item()
             train_total += targets.size(0)
@@ -156,8 +177,14 @@ for i, (train_loader, val_loader, test_loader) in enumerate(zip(train_loaders, v
 
     print(f"Test Accuracy: {test_acc:.4f}, Test F1: {f1_test:.4f}, Test Loss: {test_loss:.4f}")
 
+accs = []
+f1s = []
 
 print("----Final test-----")
 for i, test_loader in enumerate(test_loaders):
     test_acc, f1_test, test_loss = evaluate(model, test_loader, loss_fn, device)
+    accs.append(test_acc)
+    f1s.append(f1_test)
     print(f"Task {tasks[i]}: Test Accuracy: {test_acc:.4f}, Test F1: {f1_test:.4f}, Test Loss: {test_loss:.4f}")
+
+print(f"Average accuracy: {sum(accs) / len(accs):.4f}, Average F1: {sum(f1s) / len(f1s):.4f}")

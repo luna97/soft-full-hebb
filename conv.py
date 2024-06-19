@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 import torch.nn.grad
 from torch.nn.modules.utils import _pair
-from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, SOFTMAX, RELU, TANH
+from utils import normalize_weights, CLIP, balanced_credit_fn, L2NORM, L1NORM, MAXNORM, NONORM, DECAY, SOFTMAX, RELU, TANH, TRIANGLE, Triangle
 
 # conv rules
 SOFTHEBB = 'softhebb'
@@ -107,7 +107,8 @@ class SoftHebbConv2d(nn.Module):
     
     def step(self, credit=None, target=None):
         if self.training:  
-            self.weight = self.weight.detach()
+            to_norm = self.weight.view(self.weight.shape[0], -1)
+            self.weight = normalize_weights(to_norm, self.norm_type, dim=0).view(self.weight.shape).detach()
             
             if credit is not None:
                 dw = self.credit_update_rule(credit)
@@ -140,17 +141,15 @@ class SoftHebbConv2d(nn.Module):
                 else:
                     self.momentum = dw.detach()
                 if self.regularize_orth:
-                    self.weight = self.weight + (self.momentum.detach() + self.regularize_orthogonality()) * eta
+                    self.weight = self.weight + (self.momentum + self.regularize_orthogonality()).detach() * eta
                 else:
                     self.weight = self.weight + self.momentum.detach() * eta
             else:
                 if self.regularize_orth:
-                    self.weight = self.weight + (dw.detach() + self.regularize_orthogonality()) * eta 
+                    self.weight = self.weight + (dw + self.regularize_orthogonality()).detach() * eta 
                 else:
                     self.weight = self.weight + dw.detach() * eta
 
-            to_norm = self.weight.view(self.weight.shape[0], -1)
-            self.weight = normalize_weights(to_norm, self.norm_type, dim=0).view(self.weight.shape)
             self.x = None
             self.out = None
 
@@ -185,17 +184,26 @@ class SoftHebbConv2d(nn.Module):
 
     def update_rule_channel(self, target):
         # Reshape the output to [batch_size, output_channels * height * width]
+        self.out = self.out.clone().detach()
+        self.out.requires_grad_(True)
+
         batch_size, out_channels, height, width = self.out.shape
-        out = self.out.reshape(batch_size, out_channels, -1)
+        out = self.out.transpose(0, 1).reshape(out_channels, -1)
+
+        if self.activation == RELU:
+            out = F.relu(out)
+        elif self.activation == TANH:
+            out = torch.tanh(out)
+        elif self.activation == SOFTMAX:
+            out = out
 
         # out = self.out.view(batch_size, out_channels, -1) # [batch, output_channels, height * width]
-        out = F.tanh(out)
 
-        norms = torch.norm(out, dim=2, keepdim=True, p=2) + 1e-8
+        norms = torch.norm(out, dim=1, keepdim=True, p=2) + 1e-8
         out_norm = out / norms
 
         # Cosine similarity matrix
-        similarity = torch.bmm(out_norm, out_norm.transpose(2, 1)) # [batch, output_channels, output_channels]
+        similarity = torch.mm(out_norm, out_norm.T) # [output_channels, output_channels]
 
         # Create masks based on class labels
         # positive_mask = (target.unsqueeze(1) == target.unsqueeze(0)).float() # [batch, batch]
@@ -217,21 +225,24 @@ class SoftHebbConv2d(nn.Module):
             negative_mask.fill_diagonal_(0)
 
         # Compute the gradient of the loss w.r.t. similarity
-        grad_similarity = channel_mask * similarity.abs()
+        loss = channel_mask * similarity.abs()
+        loss = loss.mean()
+        loss.backward()
 
         # Compute gradient of similarity w.r.t. normalized output (out_norm)
-        grad_out_norm = grad_similarity @ out_norm
+        # grad_out_norm = grad_similarity @ out_norm
 
         # Backpropagate through normalization
-        grad_out = grad_out_norm / (norms + 1e-8) - (out_norm * (grad_out_norm * out).sum(dim=1, keepdim=True) / ((norms + 1e-8)**2))
+        # grad_out = grad_out_norm / (norms + 1e-8) - (out_norm * (grad_out_norm * out).sum(dim=1, keepdim=True) / ((norms + 1e-8)**2))
     
         # Backpropagate through tanh
         # grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
         # grad_out *= (out > 0).float().view_as(grad_out)
 
         # reshape grad_out back to the shape of the convolutional layer's output
-        grad_out = grad_out.view(batch_size, out_channels, height, width)
+        # grad_out = grad_out.view(batch_size, out_channels, height, width)
 
+        grad_out = self.out.grad
 
         # Compute the gradient with respect to the convolutional weights
         conv_weight_grad = torch.nn.grad.conv2d_weight(
@@ -246,13 +257,15 @@ class SoftHebbConv2d(nn.Module):
     def update_rule_sample(self, target):
         # Reshape the output to [batch_size, output_channels * height * width]
         batch_size, out_channels, height, width = self.out.shape
-        out = self.out.view(batch_size, -1) # [batch_size, height * width * output_channels]
+        self.out = self.out.view(batch_size, -1) # [batch_size, height * width * output_channels]
         if self.activation == RELU:
-            out = F.relu(out)
+            out = F.relu(self.out)
         elif self.activation == TANH:
-            out = torch.tanh(out)
+            out = torch.tanh(self.out)
         elif self.activation == SOFTMAX:
-            out = out
+            out = self.out
+        elif self.activation == TRIANGLE:
+            out = Triangle()(self.out)
        
         norms = torch.norm(out, dim=1, p=2, keepdim=True) + 1e-8
         out_norm = out / norms
@@ -297,6 +310,11 @@ class SoftHebbConv2d(nn.Module):
             grad_out *= (1 - torch.tanh(out)**2).view_as(grad_out)
         elif self.activation == SOFTMAX:
             grad_out *= out
+        elif self.activation == TRIANGLE:
+            input_centered = self.out - torch.mean(self.out, axis=1, keepdims=True)
+            grad_triangle = (input_centered > 0).float().view_as(grad_out)
+            grad_out *= grad_triangle 
+            grad_out -= torch.mean(grad_out, axis=1, keepdims=True)
 
         # reshape grad_out back to the shape of the convolutional layer's output
         grad_out = grad_out.view(batch_size, out_channels, height, width)

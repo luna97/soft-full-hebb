@@ -12,6 +12,14 @@ from torch.nn.modules.utils import _pair
 from torch.optim.lr_scheduler import StepLR
 import torchvision
 
+import argparse
+parser = argparse.ArgumentParser(description='Script to train a ConvNet on CIFAR10 using SoftHebb')
+parser.add_argument('--conv_channels', type=int, default=96, help='Number of channels in the convolutional layers')
+parser.add_argument('--conv_factor', type=int, default=4, help='Factor to increase the number of channels in each convolutional layer')
+parser.add_argument('--pooling', type=str, default='orig', help='Pooling type to use: orig, avg, max')
+parser.add_argument('--run_name', type=str, default='default', help='Name of the run')
+
+args = parser.parse_args()
 
 class SoftHebbConv2d(nn.Module):
     def __init__(
@@ -91,24 +99,61 @@ class DeepSoftHebb(nn.Module):
     def __init__(self):
         super(DeepSoftHebb, self).__init__()
         # block 1
-        self.bn1 = nn.BatchNorm2d(3, affine=False)
-        self.conv1 = SoftHebbConv2d(in_channels=3, out_channels=96, kernel_size=5, padding=2, t_invert=1,)
+
+        conv_channels = args.conv_channels
+        input_channels = 3
+        input_size = 32
+        conv_factor = args.conv_factor
+        out_channels_1 = conv_channels
+        out_channels_2 = out_channels_1 * conv_factor
+        out_channels_3 = out_channels_2 * conv_factor
+
+        k_size_1, k_size_2, k_size_3 = 5, 3, 3
+        stride_1, stride_2, stride_3 = 1, 1, 1
+        padding_1, padding_2, padding_3 = 2, 1, 1
+        pool_k_size_1, pool_k_size_2, pool_k_size_3 = 4, 4, 2
+        pool_stride_1, pool_stride_2, pool_stride_3 = 2, 2, 2
+        pool_padding_1, pool_padding_2, pool_padding_3 = 1, 1, 0
+
+        if args.pooling == 'orig':
+            self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
+            self.pool2 = nn.MaxPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
+            self.pool3 = nn.AvgPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
+        elif args.pooling == 'avg':
+            self.pool1 = nn.AvgPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
+            self.pool2 = nn.AvgPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
+            self.pool3 = nn.AvgPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
+        elif args.pooling == 'max':
+            self.pool1 = nn.MaxPool2d(kernel_size=pool_k_size_1, stride=pool_stride_1, padding=pool_padding_1)
+            self.pool2 = nn.MaxPool2d(kernel_size=pool_k_size_2, stride=pool_stride_2, padding=pool_padding_2)
+            self.pool3 = nn.MaxPool2d(kernel_size=pool_k_size_3, stride=pool_stride_3, padding=pool_padding_3)
+
+        # Block 1
+        self.bn1 = nn.BatchNorm2d(input_channels, affine=False)
+        self.conv1 = SoftHebbConv2d(in_channels=input_channels, out_channels=out_channels_1, kernel_size=k_size_1, padding=padding_1, t_invert=1)
         self.activ1 = Triangle(power=0.7)
-        self.pool1 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
-        # block 2
-        self.bn2 = nn.BatchNorm2d(96, affine=False)
-        self.conv2 = SoftHebbConv2d(in_channels=96, out_channels=384, kernel_size=3, padding=1, t_invert=0.65,)
+        out_size = ((input_size + 2 * padding_1 - k_size_1) // stride_1) + 1
+        out_size = ((out_size + 2 * pool_padding_1 - pool_k_size_1) // pool_stride_1) + 1
+
+        # Block 2
+        self.bn2 = nn.BatchNorm2d(out_channels_1, affine=False)
+        self.conv2 = SoftHebbConv2d(in_channels=out_channels_1, out_channels=out_channels_2, kernel_size=k_size_2, padding=padding_2, t_invert=0.65)
         self.activ2 = Triangle(power=1.4)
-        self.pool2 = nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
-        # block 3
-        self.bn3 = nn.BatchNorm2d(384, affine=False)
-        self.conv3 = SoftHebbConv2d(in_channels=384, out_channels=1536, kernel_size=3, padding=1, t_invert=0.25,)
-        self.activ3 = Triangle(power=1.)
-        self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
+        out_size = ((out_size + 2 * padding_2 - k_size_2) // stride_2) + 1
+        out_size = ((out_size + 2 * pool_padding_2 - pool_k_size_2) // pool_stride_2) + 1
+
+        # Block 3
+        self.bn3 = nn.BatchNorm2d(out_channels_2, affine=False)
+        self.conv3 = SoftHebbConv2d(in_channels=out_channels_2, out_channels=out_channels_3, kernel_size=k_size_3, padding=padding_3, t_invert=0.25)
+        self.activ3 = Triangle(power=1)
+        out_size = ((out_size + 2 * padding_3 - k_size_3) // stride_3) + 1
+        out_size = ((out_size + 2 * pool_padding_3 - pool_k_size_3) // pool_stride_3) + 1
+        out_dim = (out_size ** 2) * out_channels_3
+
         # block 4
         self.flatten = nn.Flatten()
-        self.classifier = nn.Linear(24576, 10)
-        self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, 24576)
+        self.classifier = nn.Linear(out_dim, 10)
+        self.classifier.weight.data = 0.11048543456039805 * torch.rand(10, out_dim)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
@@ -252,6 +297,10 @@ class FastCIFAR10(torchvision.datasets.CIFAR10):
 
 # Main training loop CIFAR10
 if __name__ == "__main__":
+    # add wandb logging
+    import wandb
+    wandb.init(project="softhebb-cifar10-conv", entity="wandb", config=args, mode="offline", name=args.run_name)
+
     device = torch.device("cuda" if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else "cpu")
     model = DeepSoftHebb()
     model.to(device)
@@ -306,6 +355,7 @@ if __name__ == "__main__":
     model.bn1.eval()
     model.bn2.eval()
     model.bn3.eval()
+    best_test_acc = 0
     epoch_tqdm = tqdm(range(50), desc="Supervised training")
     for epoch in epoch_tqdm:
         model.classifier.train()
@@ -373,9 +423,16 @@ if __name__ == "__main__":
         print(f'Test acc { correct / total} %')
         print(f'Test loss: {running_loss / total:.3f}')
 
+
         epoch_tqdm.set_postfix({
             'loss': train_loss / total_train,
             'accuracy': 100 * correct_train // total_train,
             'test_loss': running_loss / total,
             'test_accuracy': 100 * correct // total
         })
+
+        best_test_acc = max(best_test_acc, correct / total)
+
+    wandb.log({
+        "softhebb_best_test_accuracy": best_test_acc
+    })
